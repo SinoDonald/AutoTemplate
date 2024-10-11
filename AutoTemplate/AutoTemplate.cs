@@ -1,14 +1,12 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
-using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection.Emit;
 
-namespace AutoPut
+namespace AutoTemplate
 {
     [Transaction(TransactionMode.Manual)]
     [Regeneration(RegenerationOption.Manual)]
@@ -47,6 +45,12 @@ namespace AutoPut
 
             using(Transaction trans = new Transaction(doc, "自動放置模板"))
             {
+                // 關閉警示視窗
+                FailureHandlingOptions options = trans.GetFailureHandlingOptions();
+                CloseWarnings closeWarnings = new CloseWarnings();
+                options.SetClearAfterRollback(true);
+                options.SetFailuresPreprocessor(closeWarnings);
+                trans.SetFailureHandlingOptions(options);
                 trans.Start();
 
                 // 取得磁磚族群的FamilySymbol, 並啟動
@@ -76,8 +80,29 @@ namespace AutoPut
                                 PlanarFace planarFace = face as PlanarFace;
                                 if (planarFace != null)
                                 {
-                                    XYZ location = planarFace.Origin;
-                                    FamilyInstance putTiles = doc.Create.NewFamilyInstance(location, familySymbolList.FirstOrDefault(), wall, level, StructuralType.NonStructural);
+                                    // Get the center of the wall
+                                    BoundingBoxUV bboxUV = face.GetBoundingBox();
+                                    UV center = (bboxUV.Max + bboxUV.Min) / 2.0;
+                                    XYZ location = face.Evaluate(center);
+                                    XYZ normal = face.ComputeNormal(center);
+                                    XYZ refDir = planarFace.FaceNormal;
+
+
+                                    // 获取墙的侧面
+                                    IList<Autodesk.Revit.DB.Reference> sideFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior);
+                                    // 定位点（族实例的放置点，可以根据需要调整）
+                                    XYZ insertionPoint = new XYZ(0, 0, 0);
+                                    // 使用参考面和插入点创建族实例
+                                    FamilyInstance tiles = doc.Create.NewFamilyInstance(sideFaces.First(), location, XYZ.Zero, familySymbolList.FirstOrDefault());
+
+                                    //FamilyInstance tiles = doc.Create.NewFamilyInstance(location, familySymbolList.FirstOrDefault(), wall, level, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+
+                                    double length = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                                    double width = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                                    double heigth = RevitAPI.ConvertToInternalUnits(3800, "millimeters");
+                                    tiles.LookupParameter("長").Set(length);
+                                    tiles.LookupParameter("寬").Set(width);
+                                    tiles.get_Parameter(BuiltInParameter.INSTANCE_ELEVATION_PARAM).Set(heigth);
                                 }
                             }
                         }
@@ -86,6 +111,7 @@ namespace AutoPut
                 }
 
                 trans.Commit();
+                TaskDialog.Show("Revit", "完成");
             }
 
             return Result.Succeeded;
@@ -180,6 +206,10 @@ namespace AutoPut
                         double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
                         if (faceTZ != 1.0 && faceTZ != -1.0) { faces.Add(face); }
                     }
+                    else
+                    {
+                        faces.Add(face);
+                    }
                 }
             }
             return faces;
@@ -203,6 +233,35 @@ namespace AutoPut
             }
             saveFamilySymbols = saveFamilySymbols.OrderBy(x => x.Family.Name).ToList(); // 排序
             return saveFamilySymbols;
+        }
+        /// <summary>
+        /// 關閉警示視窗
+        /// </summary>
+        public class CloseWarnings : IFailuresPreprocessor
+        {
+            FailureProcessingResult IFailuresPreprocessor.PreprocessFailures(FailuresAccessor failuresAccessor)
+            {
+                String transactionName = failuresAccessor.GetTransactionName();
+                IList<FailureMessageAccessor> fmas = failuresAccessor.GetFailureMessages();
+                if (fmas.Count == 0) { return FailureProcessingResult.Continue; }
+                if (transactionName.Equals("EXEMPLE"))
+                {
+                    foreach (FailureMessageAccessor fma in fmas)
+                    {
+                        if (fma.GetSeverity() == FailureSeverity.Error)
+                        {
+                            failuresAccessor.DeleteAllWarnings();
+                            return FailureProcessingResult.ProceedWithRollBack;
+                        }
+                        else { failuresAccessor.DeleteWarning(fma); }
+                    }
+                }
+                else
+                {
+                    foreach (FailureMessageAccessor fma in fmas) { failuresAccessor.DeleteAllWarnings(); }
+                }
+                return FailureProcessingResult.Continue;
+            }
         }
     }
 }
