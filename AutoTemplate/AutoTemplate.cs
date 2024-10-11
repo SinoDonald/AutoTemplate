@@ -1,9 +1,12 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Emit;
 
 namespace AutoPut
 {
@@ -42,12 +45,47 @@ namespace AutoPut
                 wallsAndFaces.Add(wallAndFaces);
             }
 
-            // 取得磁磚族群的FamilySymbol, 並啟動
-            List<FamilySymbol> familySymbolList = new List<FamilySymbol>();
-            familySymbolList = GetFamilySymbols(doc);
-            foreach (FamilySymbol familySymbol in familySymbolList)
+            using(Transaction trans = new Transaction(doc, "自動放置模板"))
             {
-                if (!familySymbol.IsActive) { familySymbol.Activate(); }
+                trans.Start();
+
+                // 取得磁磚族群的FamilySymbol, 並啟動
+                List<FamilySymbol> familySymbolList = new List<FamilySymbol>();
+                familySymbolList = GetFamilySymbols(doc);
+                foreach (FamilySymbol familySymbol in familySymbolList)
+                {
+                    if (!familySymbol.IsActive) { familySymbol.Activate(); }
+                }
+
+                // 放置磁磚
+                foreach (WallAndFace wallAndFace in wallsAndFaces)
+                {
+                    Wall wall = wallAndFace.wall as Wall;
+                    Level level = doc.GetElement(wall.LevelId) as Level;
+                    try
+                    {
+                        if (level != null)
+                        {
+                            foreach (Face face in wallAndFace.faces)
+                            {
+                                //// 獲取平面的BoundingBox, 找到左上角的點
+                                //BoundingBoxUV boundingBox = face.GetBoundingBox();
+                                //UV min = boundingBox.Min;
+                                //UV max = boundingBox.Max;
+                                //XYZ location = face.Evaluate(new UV(max.U, max.V));
+                                PlanarFace planarFace = face as PlanarFace;
+                                if (planarFace != null)
+                                {
+                                    XYZ location = planarFace.Origin;
+                                    FamilyInstance putTiles = doc.Create.NewFamilyInstance(location, familySymbolList.FirstOrDefault(), wall, level, StructuralType.NonStructural);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                }
+
+                trans.Commit();
             }
 
             return Result.Succeeded;
@@ -140,7 +178,7 @@ namespace AutoPut
                     else if (where.Equals("side")) // 側面
                     {
                         double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
-                        if (faceTZ < 1.0 && faceTZ > -1.0) { faces.Add(face); }
+                        if (faceTZ != 1.0 && faceTZ != -1.0) { faces.Add(face); }
                     }
                 }
             }
