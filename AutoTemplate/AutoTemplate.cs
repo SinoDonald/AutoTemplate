@@ -1,6 +1,7 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
@@ -17,11 +18,17 @@ namespace AutoTemplate
         {
             public static string tiles = "VC73001A 純白霧面7.5*30丁掛磚 對縫";
         }
+        // 牆面與挖空的面
+        public class FaceAndHoles
+        {
+            public Face face { get; set; }
+            public List<Surface> holes = new List<Surface>();
+        }
         // 牆與面
         public class WallAndFace
         {
             public Element wall { get; set; }
-            public List<Face> faces = new List<Face>();
+            public List<FaceAndHoles> faces = new List<FaceAndHoles>();
         }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -38,8 +45,19 @@ namespace AutoTemplate
                 WallAndFace wallAndFaces = new WallAndFace();
                 List<Solid> wallSolids = GetSolids(doc, wall);
                 List<Face> wallFaces = GetFaces(wallSolids, "side");
+                foreach (Face wallFace in wallFaces)
+                {
+                    FaceAndHoles faceAndHoles = new FaceAndHoles();
+                    faceAndHoles.face = wallFace;
+                    List<CurveLoop> curveLoops = wallFace.GetEdgesAsCurveLoops().OrderByDescending(x => x.GetExactLength()).ToList();
+                    for (int i = 0; i < curveLoops.Count(); i++)
+                    {
+                        if (i != 0) { faceAndHoles.holes.Add(curveLoops[i].GetPlane()); }
+                    }
+                }
+                //Face wallFace = wallFaces.Where(x => x.Area.Equals(wallFaces.Max(y => y.Area))).FirstOrDefault(); // 取得面積最大的面
                 wallAndFaces.wall = wall;
-                wallAndFaces.faces = wallFaces;
+                //wallAndFaces.faces.Add(wallFace);
                 wallsAndFaces.Add(wallAndFaces);
             }
 
@@ -70,39 +88,40 @@ namespace AutoTemplate
                     {
                         if (level != null)
                         {
-                            foreach (Face face in wallAndFace.faces)
+                            foreach (FaceAndHoles faceAndHoles in wallAndFace.faces)  
                             {
-                                //// 獲取平面的BoundingBox, 找到左上角的點
-                                //BoundingBoxUV boundingBox = face.GetBoundingBox();
-                                //UV min = boundingBox.Min;
-                                //UV max = boundingBox.Max;
-                                //XYZ location = face.Evaluate(new UV(max.U, max.V));
-                                PlanarFace planarFace = face as PlanarFace;
-                                if (planarFace != null)
+                                Face face = faceAndHoles.face;
+                                // 取得牆的中心點
+                                BoundingBoxUV bboxUV = face.GetBoundingBox();
+                                UV center = (bboxUV.Max + bboxUV.Min) / 2.0;
+                                XYZ location = face.Evaluate(center);
+                                bool inInside = face.IsInside(center);
+                                if (inInside)
                                 {
-                                    // Get the center of the wall
-                                    BoundingBoxUV bboxUV = face.GetBoundingBox();
-                                    UV center = (bboxUV.Max + bboxUV.Min) / 2.0;
-                                    XYZ location = face.Evaluate(center);
-                                    XYZ normal = face.ComputeNormal(center);
-                                    XYZ refDir = planarFace.FaceNormal;
-
-
-                                    // 获取墙的侧面
-                                    IList<Autodesk.Revit.DB.Reference> sideFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior);
-                                    // 定位点（族实例的放置点，可以根据需要调整）
-                                    XYZ insertionPoint = new XYZ(0, 0, 0);
-                                    // 使用参考面和插入点创建族实例
-                                    FamilyInstance tiles = doc.Create.NewFamilyInstance(sideFaces.First(), location, XYZ.Zero, familySymbolList.FirstOrDefault());
-
-                                    //FamilyInstance tiles = doc.Create.NewFamilyInstance(location, familySymbolList.FirstOrDefault(), wall, level, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
-
                                     double length = RevitAPI.ConvertToInternalUnits(200, "millimeters");
                                     double width = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                                    double heigth = RevitAPI.ConvertToInternalUnits(3800, "millimeters");
-                                    tiles.LookupParameter("長").Set(length);
-                                    tiles.LookupParameter("寬").Set(width);
-                                    tiles.get_Parameter(BuiltInParameter.INSTANCE_ELEVATION_PARAM).Set(heigth);
+
+                                    // 取得外牆
+                                    IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior);
+                                    foreach (Reference exteriorFace in exteriorFaces)
+                                    {
+                                        Element elem = doc.GetElement(exteriorFace);
+                                        // 使用參考面和放置點創建磚塊族群
+                                        FamilyInstance tiles = doc.Create.NewFamilyInstance(exteriorFace, location, XYZ.Zero, familySymbolList.FirstOrDefault());
+                                        tiles.LookupParameter("長").Set(length);
+                                        tiles.LookupParameter("寬").Set(width);
+                                        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(wall.LevelId);
+                                    }
+                                    // 取得內牆
+                                    IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior);
+                                    foreach (Reference interiorFace in interiorFaces)
+                                    {
+                                        // 使用參考面和放置點創建磚塊族群
+                                        FamilyInstance tiles = doc.Create.NewFamilyInstance(interiorFace, location, XYZ.Zero, familySymbolList.FirstOrDefault());
+                                        tiles.LookupParameter("長").Set(length);
+                                        tiles.LookupParameter("寬").Set(width);
+                                        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(wall.LevelId);
+                                    }
                                 }
                             }
                         }
