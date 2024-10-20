@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Media.Media3D;
 
 namespace AutoTemplate
 {
@@ -23,7 +24,8 @@ namespace AutoTemplate
         // 牆面與挖空的面
         public class FaceAndHoles
         {
-            public Face face { get; set; }
+            public Face face { get; set; } // 最大的面
+            public List<XYZ> faceMaxEdgeXYZs = new List<XYZ>(); // 最大面的邊所有點
             public List<Surface> holes = new List<Surface>();
         }
         // 牆與面
@@ -38,6 +40,8 @@ namespace AutoTemplate
             UIDocument uidoc = uiapp.ActiveUIDocument;
             Application app = uiapp.Application;
             Document doc = uidoc.Document;
+
+            DateTime timeStart = DateTime.Now; // 計時開始 取得目前時間
 
             // 取得所有的牆的面
             List<WallAndFace> wallsAndFaces = new List<WallAndFace>();
@@ -54,7 +58,19 @@ namespace AutoTemplate
                     List<CurveLoop> curveLoops = wallFace.GetEdgesAsCurveLoops().OrderByDescending(x => x.GetExactLength()).ToList();
                     for (int i = 0; i < curveLoops.Count(); i++)
                     {
-                        if (i != 0) { faceAndHoles.holes.Add(curveLoops[i].GetPlane()); }
+                        if (i == 0)
+                        {
+                            List<XYZ> faceMaxEdgeXYZs = new List<XYZ>();
+                            foreach (Curve curve in curveLoops[i])
+                            {
+                                foreach(XYZ xyz in curve.Tessellate())
+                                {
+                                    faceMaxEdgeXYZs.Add(xyz);
+                                }
+                            }
+                            faceAndHoles.faceMaxEdgeXYZs = faceMaxEdgeXYZs.Distinct().ToList();
+                        }
+                        else { faceAndHoles.holes.Add(curveLoops[i].GetPlane()); }
                     }
                     wallAndFaces.faces.Add(faceAndHoles);
                 }
@@ -81,8 +97,8 @@ namespace AutoTemplate
                 {
                     if (!familySymbol.IsActive) { familySymbol.Activate(); }
                 }
+                FamilySymbol fs = familySymbolList.FirstOrDefault();
 
-                // 放置磁磚
                 foreach (WallAndFace wallAndFace in wallsAndFaces)
                 {
                     Wall wall = wallAndFace.wall as Wall;
@@ -91,80 +107,19 @@ namespace AutoTemplate
                     {
                         if (level != null)
                         {
-                            foreach (FaceAndHoles faceAndHoles in wallAndFace.faces)
-                            {
-                                Face face = faceAndHoles.face;
-
-                                // 取得牆的中心點
-                                BoundingBoxUV bboxUV = face.GetBoundingBox();
-                                UV center = (bboxUV.Max + bboxUV.Min) / 2.0;
-                                XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
-                                XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
-                                //XYZ location = face.Evaluate(center);
-                                bool inInside = face.IsInside(center);
-
-                                double length = RevitAPI.ConvertToInternalUnits(200, "millimeters");  // 長方形的長度
-                                double width = RevitAPI.ConvertToInternalUnits(200, "millimeters"); // 長方形的寬度
-                                //Vector vector = new Vector(doorFaceOrigin.X - otherDoorFaceOrigin.X, doorFaceOrigin.Y - otherDoorFaceOrigin.Y); // 方向向量
-                                //vector = GetVectorOffset(vector, frontOffset);
-                                double availableArea = face.Area;
-                                int rows = (int)(availableArea / (length * width));
-                                int cols = (int)(availableArea / (length * width));
-
-                                // 開始在面上佈滿長方形，跳過挖空區域
-                                for (int i = 0; i < rows; i++)
-                                {
-                                    for (int j = 0; j < cols; j++)
-                                    {
-                                        XYZ location = new XYZ(i * length, j * width, 0);
-                                        //// 在這個位置創建長方形
-                                        //IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior);
-                                        //FamilyInstance tiles = doc.Create.NewFamilyInstance(exteriorFaces.FirstOrDefault(), location, XYZ.Zero, familySymbolList.FirstOrDefault());
-                                        //tiles.LookupParameter("長").Set(length);
-                                        //tiles.LookupParameter("寬").Set(width);
-                                        //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(wall.LevelId);
-                                    }
-                                }
-                                //// 取得牆的中心點
-                                //BoundingBoxUV bboxUV = face.GetBoundingBox();
-                                //UV center = (bboxUV.Max + bboxUV.Min) / 2.0;
-                                //XYZ location = face.Evaluate(center);
-                                //bool inInside = face.IsInside(center);
-                                //if (inInside)
-                                //{
-                                //    double length = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                                //    double width = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-
-                                //    // 取得外牆
-                                //    IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior);
-                                //    foreach (Reference exteriorFace in exteriorFaces)
-                                //    {
-                                //        Element elem = doc.GetElement(exteriorFace);
-                                //        // 使用參考面和放置點創建磚塊族群
-                                //        FamilyInstance tiles = doc.Create.NewFamilyInstance(exteriorFace, location, XYZ.Zero, familySymbolList.FirstOrDefault());
-                                //        tiles.LookupParameter("長").Set(length);
-                                //        tiles.LookupParameter("寬").Set(width);
-                                //        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(wall.LevelId);
-                                //    }
-                                //    // 取得內牆
-                                //    IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior);
-                                //    foreach (Reference interiorFace in interiorFaces)
-                                //    {
-                                //        // 使用參考面和放置點創建磚塊族群
-                                //        FamilyInstance tiles = doc.Create.NewFamilyInstance(interiorFace, location, XYZ.Zero, familySymbolList.FirstOrDefault());
-                                //        tiles.LookupParameter("長").Set(length);
-                                //        tiles.LookupParameter("寬").Set(width);
-                                //        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(wall.LevelId);
-                                //    }
-                                //}
-                            }
+                            // 在這個位置創建長方形
+                            IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
+                            PutTiles(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 放置磁磚
+                            //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
                         }
                     }
                     catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
                 }
 
                 trans.Commit();
-                TaskDialog.Show("Revit", "完成");
+                DateTime timeEnd = DateTime.Now; // 計時結束 取得目前時間
+                TimeSpan totalTime = timeEnd - timeStart;
+                TaskDialog.Show("Revit", "完成，耗時：" + totalTime.Minutes + " 分 " + totalTime.Seconds + " 秒。\n\n");
             }
 
             //// 協助冠鋐測試畫線
@@ -325,6 +280,56 @@ namespace AutoTemplate
             }
             saveFamilySymbols = saveFamilySymbols.OrderBy(x => x.Family.Name).ToList(); // 排序
             return saveFamilySymbols;
+        }
+        /// <summary>
+        /// 放置磁磚
+        /// </summary>
+        /// <param name="uidoc"></param>
+        /// <param name="doc"></param>
+        /// <param name="referenceFaces"></param>
+        /// <param name="fs"></param>
+        /// <param name="elemId"></param>
+        private void PutTiles(UIDocument uidoc, Document doc, IList<Reference> referenceFaces, FamilySymbol fs, ElementId elemId)
+        {
+            double length = RevitAPI.ConvertToInternalUnits(300, "millimeters");  // 磁磚的長度
+            double width = RevitAPI.ConvertToInternalUnits(300, "millimeters"); // 磁磚的寬度
+
+            foreach (Reference referenceFace in referenceFaces)
+            {
+                try
+                {
+                    Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
+                    BoundingBoxUV bboxUV = face.GetBoundingBox();
+                    XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+                    XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+
+                    double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
+                    double wallWidth = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆寬度
+                    for (double i = 0; i <= wallWidth; i += width)
+                    {
+                        for (double j = 0; j <= wallLength; j += length)
+                        {
+                            try
+                            {
+                                Vector lengthVector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                                lengthVector = GetVectorOffset(lengthVector, j);
+                                XYZ location = new XYZ(minXYZ.X + lengthVector.X, minXYZ.Y + lengthVector.Y, i);
+
+                                // 放置外牆
+                                FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs);
+                                tiles.LookupParameter("長").Set(length);
+                                tiles.LookupParameter("寬").Set(width);
+                                tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+
+                                doc.Regenerate();
+                                uidoc.RefreshActiveView();
+                            }
+                            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                        }
+                    }
+                }
+                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+            }
         }
         /// <summary>
         /// 取得向量偏移的距離
