@@ -1,13 +1,12 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
-using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Media3D;
 
 namespace AutoTemplate
@@ -21,20 +20,13 @@ namespace AutoTemplate
         {
             public static string tiles = "VC73001A 純白霧面7.5*30丁掛磚 對縫";
         }
-        // 牆面與挖空的面
-        public class FaceAndHoles
+        public class TileType
         {
-            public Face face { get; set; } // 最大的面
-            public List<XYZ> faceMaxEdgeXYZs = new List<XYZ>(); // 最大面的邊所有點
-            public List<Surface> holes = new List<Surface>();
+            public int A { get; set; }
+            public int B { get; set; }
+            public int C { get; set; }
         }
-        // 牆與面
-        public class WallAndFace
-        {
-            public Element wall { get; set; }
-            public List<FaceAndHoles> faces = new List<FaceAndHoles>();
-        }
-        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+            public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
@@ -43,43 +35,8 @@ namespace AutoTemplate
 
             DateTime timeStart = DateTime.Now; // 計時開始 取得目前時間
 
-            // 取得所有的牆的面
-            List<WallAndFace> wallsAndFaces = new List<WallAndFace>();
-            List<Element> walls = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().ToList();
-            foreach (Element wall in walls)
-            {
-                WallAndFace wallAndFaces = new WallAndFace();
-                List<Solid> wallSolids = GetSolids(doc, wall);
-                List<Face> wallFaces = GetFaces(wallSolids, "side");
-                foreach (Face wallFace in wallFaces)
-                {
-                    FaceAndHoles faceAndHoles = new FaceAndHoles();
-                    faceAndHoles.face = wallFace;
-                    List<CurveLoop> curveLoops = wallFace.GetEdgesAsCurveLoops().OrderByDescending(x => x.GetExactLength()).ToList();
-                    for (int i = 0; i < curveLoops.Count(); i++)
-                    {
-                        if (i == 0)
-                        {
-                            List<XYZ> faceMaxEdgeXYZs = new List<XYZ>();
-                            foreach (Curve curve in curveLoops[i])
-                            {
-                                foreach(XYZ xyz in curve.Tessellate())
-                                {
-                                    faceMaxEdgeXYZs.Add(xyz);
-                                }
-                            }
-                            faceAndHoles.faceMaxEdgeXYZs = faceMaxEdgeXYZs.Distinct().ToList();
-                        }
-                        else { faceAndHoles.holes.Add(curveLoops[i].GetPlane()); }
-                    }
-                    wallAndFaces.faces.Add(faceAndHoles);
-                }
-                //Face wallFace = wallFaces.Where(x => x.Area.Equals(wallFaces.Max(y => y.Area))).FirstOrDefault(); // 取得面積最大的面
-                wallAndFaces.wall = wall;
-                //wallAndFaces.faces.Add(wallFace);
-                wallsAndFaces.Add(wallAndFaces);
-            }
-
+            // 取得所有的牆
+            List<Wall> walls = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().Cast<Wall>().ToList();
             using (Transaction trans = new Transaction(doc, "自動放置模板"))
             {
                 // 關閉警示視窗
@@ -99,9 +56,10 @@ namespace AutoTemplate
                 }
                 FamilySymbol fs = familySymbolList.FirstOrDefault();
 
-                foreach (WallAndFace wallAndFace in wallsAndFaces)
+                foreach (Wall wall in walls)
                 {
-                    Wall wall = wallAndFace.wall as Wall;
+                    List<Solid> wallSolids = GetSolids(doc, wall);
+                    List<Face> wallFaces = GetFaces(wallSolids, "side");
                     Level level = doc.GetElement(wall.LevelId) as Level;
                     try
                     {
@@ -109,7 +67,7 @@ namespace AutoTemplate
                         {
                             // 在這個位置創建長方形
                             IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
-                            PutTiles(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 放置磁磚
+                            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 放置磁磚
                             //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
                         }
                     }
@@ -121,45 +79,6 @@ namespace AutoTemplate
                 TimeSpan totalTime = timeEnd - timeStart;
                 TaskDialog.Show("Revit", "完成，耗時：" + totalTime.Minutes + " 分 " + totalTime.Seconds + " 秒。\n\n");
             }
-
-            //// 協助冠鋐測試畫線
-            //Element elem = new FilteredElementCollector(doc).OfClass(typeof(ImportInstance)).FirstOrDefault();
-            //Tuple<List<Curve>, List<PolyLine>> curvesPolyLines = GetCurvesPolyLines(doc, elem);
-            //List<Curve> curves = curvesPolyLines.Item1;
-            //List<PolyLine> polyLines = curvesPolyLines.Item2;
-
-            //using (Transaction trans = new Transaction(doc, "畫線"))
-            //{
-            //    trans.Start();
-            //    foreach (Curve curve in curves)
-            //    {
-            //        try
-            //        {
-            //            Line line = Line.CreateBound(curve.Tessellate()[0], curve.Tessellate()[curve.Tessellate().Count - 1]);
-            //            XYZ normal = new XYZ(line.Direction.Z - line.Direction.Y, line.Direction.X - line.Direction.Z, line.Direction.Y - line.Direction.X); // 使用與線不平行的任意向量
-            //            Plane plane = Plane.CreateByNormalAndOrigin(normal, curve.Tessellate()[0]);
-            //            SketchPlane sketchPlane = SketchPlane.Create(doc, plane);
-            //            ModelCurve modelCurve = doc.Create.NewModelCurve(line, sketchPlane);
-            //        }
-            //        catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-            //    }
-            //    foreach (PolyLine polyLine in polyLines)
-            //    {
-            //        for (int i = 0; i < polyLine.GetCoordinates().Count; i++)
-            //        {
-            //            try
-            //            {
-            //                Line line = Line.CreateBound(polyLine.GetCoordinate(i), polyLine.GetCoordinate(i + 1));
-            //                XYZ normal = new XYZ(line.Direction.Z - line.Direction.Y, line.Direction.X - line.Direction.Z, line.Direction.Y - line.Direction.X); // 使用與線不平行的任意向量
-            //                Plane plane = Plane.CreateByNormalAndOrigin(normal, polyLine.GetCoordinate(i));
-            //                SketchPlane sketchPlane = SketchPlane.Create(doc, plane);
-            //                ModelCurve modelCurve = doc.Create.NewModelCurve(line, sketchPlane);
-            //            }
-            //            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-            //        }
-            //    }
-            //    trans.Commit();
-            //}
 
             return Result.Succeeded;
         }
@@ -282,18 +201,15 @@ namespace AutoTemplate
             return saveFamilySymbols;
         }
         /// <summary>
-        /// 放置磁磚
+        /// 計算放置各尺寸的數量
         /// </summary>
         /// <param name="uidoc"></param>
         /// <param name="doc"></param>
         /// <param name="referenceFaces"></param>
         /// <param name="fs"></param>
         /// <param name="elemId"></param>
-        private void PutTiles(UIDocument uidoc, Document doc, IList<Reference> referenceFaces, FamilySymbol fs, ElementId elemId)
+        private void CalculateGeom(UIDocument uidoc, Document doc, IList<Reference> referenceFaces, FamilySymbol fs, ElementId elemId)
         {
-            double length = RevitAPI.ConvertToInternalUnits(300, "millimeters");  // 磁磚的長度
-            double width = RevitAPI.ConvertToInternalUnits(300, "millimeters"); // 磁磚的寬度
-
             foreach (Reference referenceFace in referenceFaces)
             {
                 try
@@ -302,34 +218,112 @@ namespace AutoTemplate
                     BoundingBoxUV bboxUV = face.GetBoundingBox();
                     XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
                     XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+                    Vector vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                    vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
+                    minXYZ = new XYZ(minXYZ.X + vector.X, minXYZ.Y + vector.Y, minXYZ.Z); // 預留起始的空間
+                    maxXYZ = new XYZ(maxXYZ.X - vector.X, maxXYZ.Y - vector.Y, maxXYZ.Z); // 預留結束的空間
 
                     double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
                     double wallWidth = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆寬度
-                    for (double i = 0; i <= wallWidth; i += width)
+
+                    // 磁磚的寬度
+                    double dWidth = RevitAPI.ConvertToInternalUnits(300, "millimeters");
+                    int d = Convert.ToInt32(Math.Floor(wallWidth / dWidth));
+                    double d1 = wallWidth % dWidth;
+                    double eWidth = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                    int e = Convert.ToInt32(Math.Floor(d1 / eWidth));
+                    double e1 = d1 % eWidth;
+                    double fWidth = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                    int f = Convert.ToInt32(Math.Floor(e1 / fWidth));
+
+                    // 磁磚的長度
+                    double aLength = RevitAPI.ConvertToInternalUnits(300, "millimeters");
+                    int a = Convert.ToInt32(Math.Floor(wallLength / aLength));
+                    double a1 = wallLength % aLength;
+                    double bLength = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                    int b = Convert.ToInt32(Math.Floor(a1 / bLength));
+                    double b1 = a1 % bLength;
+                    double cLength = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                    int c = Convert.ToInt32(Math.Floor(b1 / cLength));
+
+                    XYZ location = minXYZ;
+                    for(int j = 0; j < 3; j++)
                     {
-                        for (double j = 0; j <= wallLength; j += length)
+                        int frequency = d;
+                        double width = RevitAPI.ConvertToInternalUnits(300, "millimeters");
+                        if (j == 1)
                         {
-                            try
+                            frequency = e;
+                            width = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                        }
+                        else if (j == 2)
+                        {
+                            frequency = f;
+                            width = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                        }
+                        for (int k = 0; k < frequency; k++)
+                        {
+                            for (int i = 0; i < 3; i++)
                             {
-                                Vector lengthVector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
-                                lengthVector = GetVectorOffset(lengthVector, j);
-                                XYZ location = new XYZ(minXYZ.X + lengthVector.X, minXYZ.Y + lengthVector.Y, i);
-
-                                // 放置外牆
-                                FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs);
-                                tiles.LookupParameter("長").Set(length);
-                                tiles.LookupParameter("寬").Set(width);
-                                tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
-
-                                doc.Regenerate();
-                                uidoc.RefreshActiveView();
+                                int counts = a;
+                                double length = RevitAPI.ConvertToInternalUnits(300, "millimeters");
+                                if (i == 1)
+                                {
+                                    counts = b;
+                                    length = RevitAPI.ConvertToInternalUnits(200, "millimeters");
+                                }
+                                else if (i == 2)
+                                {
+                                    counts = c;
+                                    length = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                                }
+                                location = PutTiles(doc, counts, referenceFace, location, fs, elemId, vector, length, width, k - 1, maxXYZ, minXYZ);
                             }
-                            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                            location = new XYZ(minXYZ.X, minXYZ.Y, width * k+1);
                         }
                     }
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
+        }
+        /// <summary>
+        /// 放置磁磚
+        /// </summary>
+        /// <param name="doc"></param>
+        /// <param name="counts"></param>
+        /// <param name="referenceFace"></param>
+        /// <param name="location"></param>
+        /// <param name="fs"></param>
+        /// <param name="elemId"></param>
+        /// <param name="vector"></param>
+        /// <param name="length"></param>
+        /// <param name="width"></param>
+        /// <param name="maxXYZ"></param>
+        /// <param name="minXYZ"></param>
+        /// <returns></returns>
+        private XYZ PutTiles(Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, int k, XYZ maxXYZ, XYZ minXYZ)
+        {
+            for (int count = 0; count < counts; count++)
+            {
+                try
+                {
+                    // 放置外牆
+                    FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs);
+                    tiles.LookupParameter("長").Set(length);
+                    tiles.LookupParameter("寬").Set(width);
+                    tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+
+                    vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                    vector = GetVectorOffset(vector, length);
+                    location = new XYZ(location.X + vector.X, location.Y + vector.Y, width * k + 1);
+
+                    //doc.Regenerate();
+                    //uidoc.RefreshActiveView();
+                }
+                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+            }
+
+            return location;
         }
         /// <summary>
         /// 取得向量偏移的距離
@@ -372,95 +366,5 @@ namespace AutoTemplate
                 return FailureProcessingResult.Continue;
             }
         }
-        ///// <summary>
-        ///// 協助冠鋐測試畫線
-        ///// </summary>
-        ///// <param name="doc"></param>
-        ///// <param name="elem"></param>
-        ///// <returns></returns>
-        //private Tuple<List<Curve>, List<PolyLine>> GetCurvesPolyLines(Document doc, Element elem)
-        //{
-        //    // 1.讀取Geometry Option
-        //    Options options = new Options();
-        //    //options.View = doc.GetElement(room.Level.FindAssociatedPlanViewId()) as Autodesk.Revit.DB.View;
-        //    options.DetailLevel = ((doc.ActiveView != null) ? doc.ActiveView.DetailLevel : ViewDetailLevel.Medium);
-        //    options.ComputeReferences = true;
-        //    options.IncludeNonVisibleObjects = true;
-        //    // 得到幾何元素
-        //    GeometryElement geomElem = elem.get_Geometry(options);
-        //    List<Curve> curves = GeometryCurves(geomElem); // 取得Curve
-        //    List<PolyLine> polyLines = GeometryPolyLines(geomElem); // 取得PolyLine
-
-        //    return Tuple.Create(curves, polyLines);
-        //}
-        ///// <summary>
-        ///// 取得Curve
-        ///// </summary>
-        ///// <param name="geoObj"></param>
-        ///// <returns></returns>
-        //private List<Curve> GeometryCurves(GeometryObject geoObj)
-        //{
-        //    List<Curve> curves = new List<Curve>();
-        //    if (geoObj is Arc)
-        //    {
-        //        Arc curve = (Arc)geoObj;
-        //        curves.Add(curve);
-        //    }
-        //    if (geoObj is Line)
-        //    {
-        //        Line curve = (Line)geoObj;
-        //        curves.Add(curve);
-        //    }
-        //    if (geoObj is GeometryInstance)
-        //    {
-        //        GeometryInstance geoIns = geoObj as GeometryInstance;
-        //        GeometryElement geometryElement = (geoObj as GeometryInstance).GetSymbolGeometry(geoIns.Transform); // 座標轉換
-        //        foreach (GeometryObject o in geometryElement)
-        //        {
-        //            curves.AddRange(GeometryCurves(o));
-        //        }
-        //    }
-        //    else if (geoObj is GeometryElement)
-        //    {
-        //        GeometryElement geometryElement2 = (GeometryElement)geoObj;
-        //        foreach (GeometryObject o in geometryElement2)
-        //        {
-        //            curves.AddRange(GeometryCurves(o));
-        //        }
-        //    }
-        //    return curves;
-        //}
-        ///// <summary>
-        ///// 取得PolyLine
-        ///// </summary>
-        ///// <param name="geoObj"></param>
-        ///// <returns></returns>
-        //private List<PolyLine> GeometryPolyLines(GeometryObject geoObj)
-        //{
-        //    List<PolyLine> polyLines = new List<PolyLine>();
-        //    if (geoObj is PolyLine)
-        //    {
-        //        PolyLine curve = (PolyLine)geoObj;
-        //        polyLines.Add(curve);
-        //    }
-        //    if (geoObj is GeometryInstance)
-        //    {
-        //        GeometryInstance geoIns = geoObj as GeometryInstance;
-        //        GeometryElement geometryElement = (geoObj as GeometryInstance).GetSymbolGeometry(geoIns.Transform); // 座標轉換
-        //        foreach (GeometryObject o in geometryElement)
-        //        {
-        //            polyLines.AddRange(GeometryPolyLines(o));
-        //        }
-        //    }
-        //    else if (geoObj is GeometryElement)
-        //    {
-        //        GeometryElement geometryElement2 = (GeometryElement)geoObj;
-        //        foreach (GeometryObject o in geometryElement2)
-        //        {
-        //            polyLines.AddRange(GeometryPolyLines(o));
-        //        }
-        //    }
-        //    return polyLines;
-        //}
     }
 }
