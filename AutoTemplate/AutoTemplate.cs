@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Media3D;
 
 namespace AutoTemplate
 {
@@ -20,13 +19,13 @@ namespace AutoTemplate
         {
             public static string tiles = "VC73001A 純白霧面7.5*30丁掛磚 對縫";
         }
-        public class TileType
+        // 計算圖型的長度與高度
+        public class LengthOrHeight
         {
-            public int A { get; set; }
-            public int B { get; set; }
-            public int C { get; set; }
+            public int count { get; set; }
+            public double heightOrHeight { get; set; }
         }
-            public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             UIApplication uiapp = commandData.Application;
             UIDocument uidoc = uiapp.ActiveUIDocument;
@@ -67,8 +66,9 @@ namespace AutoTemplate
                         {
                             // 在這個位置創建長方形
                             IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
-                            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 放置磁磚
+                            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
                             //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
+                            //CalculateGeom(uidoc, doc, interiorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
                         }
                     }
                     catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
@@ -223,68 +223,49 @@ namespace AutoTemplate
                     minXYZ = new XYZ(minXYZ.X + vector.X, minXYZ.Y + vector.Y, minXYZ.Z); // 預留起始的空間
                     maxXYZ = new XYZ(maxXYZ.X - vector.X, maxXYZ.Y - vector.Y, maxXYZ.Z); // 預留結束的空間
 
+                    double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
                     double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
-                    double wallWidth = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆寬度
 
-                    // 磁磚的寬度
-                    double dWidth = RevitAPI.ConvertToInternalUnits(300, "millimeters");
-                    int d = Convert.ToInt32(Math.Floor(wallWidth / dWidth));
-                    double d1 = wallWidth % dWidth;
-                    double eWidth = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                    int e = Convert.ToInt32(Math.Floor(d1 / eWidth));
-                    double e1 = d1 % eWidth;
-                    double fWidth = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                    int f = Convert.ToInt32(Math.Floor(e1 / fWidth));
-
-                    // 磁磚的長度
-                    double aLength = RevitAPI.ConvertToInternalUnits(300, "millimeters");
-                    int a = Convert.ToInt32(Math.Floor(wallLength / aLength));
-                    double a1 = wallLength % aLength;
-                    double bLength = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                    int b = Convert.ToInt32(Math.Floor(a1 / bLength));
-                    double b1 = a1 % bLength;
-                    double cLength = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                    int c = Convert.ToInt32(Math.Floor(b1 / cLength));
+                    List<int> sizes = new List<int>() { 300, 200, 100 };
+                    List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
+                    List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
 
                     XYZ location = minXYZ;
-                    for(int j = 0; j < 3; j++)
+                    double rows = 0;
+                    foreach(LengthOrHeight heightItem in heightList)
                     {
-                        int frequency = d;
-                        double width = RevitAPI.ConvertToInternalUnits(300, "millimeters");
-                        if (j == 1)
+                        for (int row = 0; row < heightItem.count; row++)
                         {
-                            frequency = e;
-                            width = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                        }
-                        else if (j == 2)
-                        {
-                            frequency = f;
-                            width = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                        }
-                        for (int k = 0; k < frequency; k++)
-                        {
-                            for (int i = 0; i < 3; i++)
+                            foreach (LengthOrHeight lengthItem in lengthList)
                             {
-                                int counts = a;
-                                double length = RevitAPI.ConvertToInternalUnits(300, "millimeters");
-                                if (i == 1)
-                                {
-                                    counts = b;
-                                    length = RevitAPI.ConvertToInternalUnits(200, "millimeters");
-                                }
-                                else if (i == 2)
-                                {
-                                    counts = c;
-                                    length = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                                }
-                                location = PutTiles(doc, counts, referenceFace, location, fs, elemId, vector, length, width, k - 1, maxXYZ, minXYZ);
+                                location = PutTiles(doc, lengthItem.count, referenceFace, location, fs, elemId, vector, lengthItem.heightOrHeight, heightItem.heightOrHeight, rows, maxXYZ, minXYZ);
                             }
-                            location = new XYZ(minXYZ.X, minXYZ.Y, width * k+1);
+                            rows += heightItem.heightOrHeight;
+                            location = new XYZ(minXYZ.X, minXYZ.Y, rows);
                         }
                     }
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
+        }
+        /// <summary>
+        /// 面積長度與高度的磁磚尺寸與數量
+        /// </summary>
+        /// <param name="length"></param>
+        /// <param name="sizes"></param>
+        /// <returns></returns>
+        private List<LengthOrHeight> LengthAndHeightTiles(double length, List<int> sizes)
+        {
+            List<LengthOrHeight> lengthList = new List<LengthOrHeight>();
+            foreach (int size in sizes)
+            {
+                LengthOrHeight lengthOrHeight = new LengthOrHeight();
+                lengthOrHeight.heightOrHeight = RevitAPI.ConvertToInternalUnits(size, "millimeters"); // 磁磚的長度
+                lengthOrHeight.count = Convert.ToInt32(Math.Floor(length / lengthOrHeight.heightOrHeight)); // 長度的數量
+                length = length % lengthOrHeight.heightOrHeight; // 餘數繼續計算
+                lengthList.Add(lengthOrHeight);
+            }
+            return lengthList;
         }
         /// <summary>
         /// 放置磁磚
@@ -297,11 +278,11 @@ namespace AutoTemplate
         /// <param name="elemId"></param>
         /// <param name="vector"></param>
         /// <param name="length"></param>
-        /// <param name="width"></param>
+        /// <param name="rows"></param>
         /// <param name="maxXYZ"></param>
         /// <param name="minXYZ"></param>
         /// <returns></returns>
-        private XYZ PutTiles(Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, int k, XYZ maxXYZ, XYZ minXYZ)
+        private XYZ PutTiles(Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, double rows, XYZ maxXYZ, XYZ minXYZ)
         {
             for (int count = 0; count < counts; count++)
             {
@@ -315,7 +296,7 @@ namespace AutoTemplate
 
                     vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
                     vector = GetVectorOffset(vector, length);
-                    location = new XYZ(location.X + vector.X, location.Y + vector.Y, width * k + 1);
+                    location = new XYZ(location.X + vector.X, location.Y + vector.Y, rows);
 
                     //doc.Regenerate();
                     //uidoc.RefreshActiveView();
