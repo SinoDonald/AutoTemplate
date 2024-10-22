@@ -215,6 +215,22 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
+
+                    List<Line> rowLines = new List<Line>(); // 橫向的線
+                    List<Line> colLines = new List<Line>(); // 縱向的線
+                    foreach(CurveLoop curveLoop in face.GetEdgesAsCurveLoops())
+                    {
+                        foreach(Curve curve in curveLoop)
+                        {
+                            Line line = curve as Line;
+                            if (line.Direction.Z == 1.0 || line.Direction.Z == -1.0) { rowLines.Add(line); }
+                            else { colLines.Add(line); }
+                        }
+                    }
+                    Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
+                    Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
+                    List<double> heights = rowLines.Where(x => (x.Origin.Z - bottomLine.Origin.Z) != 0).Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
+
                     BoundingBoxUV bboxUV = face.GetBoundingBox();
                     XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
                     XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
@@ -230,20 +246,20 @@ namespace AutoTemplate
                     List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
                     List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
 
-                    XYZ location = minXYZ;
-                    double rows = 0;
-                    foreach(LengthOrHeight heightItem in heightList)
-                    {
-                        for (int row = 0; row < heightItem.count; row++)
-                        {
-                            foreach (LengthOrHeight lengthItem in lengthList)
-                            {
-                                location = PutTiles(doc, lengthItem.count, referenceFace, location, fs, elemId, vector, lengthItem.heightOrHeight, heightItem.heightOrHeight, rows, maxXYZ, minXYZ);
-                            }
-                            rows += heightItem.heightOrHeight;
-                            location = new XYZ(minXYZ.X, minXYZ.Y, rows);
-                        }
-                    }
+                    //XYZ location = minXYZ;
+                    //double rows = 0;
+                    //foreach(LengthOrHeight heightItem in heightList)
+                    //{
+                    //    for (int row = 0; row < heightItem.count; row++)
+                    //    {
+                    //        foreach (LengthOrHeight lengthItem in lengthList)
+                    //        {
+                    //            location = PutTiles(uidoc, doc, lengthItem.count, referenceFace, location, fs, elemId, vector, lengthItem.heightOrHeight, heightItem.heightOrHeight, rows, maxXYZ, minXYZ);
+                    //        }
+                    //        rows += heightItem.heightOrHeight;
+                    //        location = new XYZ(minXYZ.X, minXYZ.Y, rows);
+                    //    }
+                    //}
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
@@ -270,6 +286,7 @@ namespace AutoTemplate
         /// <summary>
         /// 放置磁磚
         /// </summary>
+        /// <param name="uidoc"></param>
         /// <param name="doc"></param>
         /// <param name="counts"></param>
         /// <param name="referenceFace"></param>
@@ -278,11 +295,12 @@ namespace AutoTemplate
         /// <param name="elemId"></param>
         /// <param name="vector"></param>
         /// <param name="length"></param>
+        /// <param name="width"></param>
         /// <param name="rows"></param>
         /// <param name="maxXYZ"></param>
         /// <param name="minXYZ"></param>
         /// <returns></returns>
-        private XYZ PutTiles(Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, double rows, XYZ maxXYZ, XYZ minXYZ)
+        private XYZ PutTiles(UIDocument uidoc, Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, double rows, XYZ maxXYZ, XYZ minXYZ)
         {
             for (int count = 0; count < counts; count++)
             {
