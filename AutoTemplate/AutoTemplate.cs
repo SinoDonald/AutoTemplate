@@ -229,37 +229,52 @@ namespace AutoTemplate
                     }
                     Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
                     Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
-                    List<double> heights = rowLines.Where(x => (x.Origin.Z - bottomLine.Origin.Z) != 0).Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
+                    List<double> heights = rowLines.Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
 
-                    BoundingBoxUV bboxUV = face.GetBoundingBox();
-                    XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
-                    XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
-                    Vector vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
-                    vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
-                    minXYZ = new XYZ(minXYZ.X + vector.X, minXYZ.Y + vector.Y, minXYZ.Z); // 預留起始的空間
-                    maxXYZ = new XYZ(maxXYZ.X - vector.X, maxXYZ.Y - vector.Y, maxXYZ.Z); // 預留結束的空間
+                    for (int i = 0; i < heights.Count; i++)
+                    {
+                        BoundingBoxUV bboxUV = face.GetBoundingBox();
+                        XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+                        XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+                        Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
+                        vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
+                        XYZ minXYZ = new XYZ(startXYZ.X + vector.X, startXYZ.Y + vector.Y, startXYZ.Z + heights[i]); // 預留起始的空間
+                        XYZ maxXYZ = new XYZ(endXYZ.X - vector.X, endXYZ.Y - vector.Y, startXYZ.Z + heights[i + 1]); // 預留結束的空間
 
-                    double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
-                    double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
+                        double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
+                        double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
 
-                    List<int> sizes = new List<int>() { 300, 200, 100 };
-                    List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
-                    List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
+                        List<int> sizes = new List<int>() { 300, 200, 100 };
+                        List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
+                        List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
 
-                    //XYZ location = minXYZ;
-                    //double rows = 0;
-                    //foreach(LengthOrHeight heightItem in heightList)
-                    //{
-                    //    for (int row = 0; row < heightItem.count; row++)
-                    //    {
-                    //        foreach (LengthOrHeight lengthItem in lengthList)
-                    //        {
-                    //            location = PutTiles(uidoc, doc, lengthItem.count, referenceFace, location, fs, elemId, vector, lengthItem.heightOrHeight, heightItem.heightOrHeight, rows, maxXYZ, minXYZ);
-                    //        }
-                    //        rows += heightItem.heightOrHeight;
-                    //        location = new XYZ(minXYZ.X, minXYZ.Y, rows);
-                    //    }
-                    //}
+                        XYZ location = minXYZ;
+                        foreach (LengthOrHeight heightItem in heightList)
+                        {
+                            for (int row = 0; row < heightItem.count; row++)
+                            {
+                                foreach (LengthOrHeight lengthItem in lengthList)
+                                {
+                                    for (int count = 0; count < lengthItem.count; count++)
+                                    {
+                                        try
+                                        {
+                                            FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs); // 放置磁磚
+                                            tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
+                                            tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
+                                            tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+
+                                            vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                                            vector = GetVectorOffset(vector, lengthItem.heightOrHeight);
+                                            location = new XYZ(location.X + vector.X, location.Y + vector.Y, location.Z);
+                                        }
+                                        catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                                    }
+                                }
+                                location = new XYZ(minXYZ.X, minXYZ.Y, location.Z + heightItem.heightOrHeight);
+                            }
+                        }
+                    }
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
@@ -282,47 +297,6 @@ namespace AutoTemplate
                 lengthList.Add(lengthOrHeight);
             }
             return lengthList;
-        }
-        /// <summary>
-        /// 放置磁磚
-        /// </summary>
-        /// <param name="uidoc"></param>
-        /// <param name="doc"></param>
-        /// <param name="counts"></param>
-        /// <param name="referenceFace"></param>
-        /// <param name="location"></param>
-        /// <param name="fs"></param>
-        /// <param name="elemId"></param>
-        /// <param name="vector"></param>
-        /// <param name="length"></param>
-        /// <param name="width"></param>
-        /// <param name="rows"></param>
-        /// <param name="maxXYZ"></param>
-        /// <param name="minXYZ"></param>
-        /// <returns></returns>
-        private XYZ PutTiles(UIDocument uidoc, Document doc, int counts, Reference referenceFace, XYZ location, FamilySymbol fs, ElementId elemId, Vector vector, double length, double width, double rows, XYZ maxXYZ, XYZ minXYZ)
-        {
-            for (int count = 0; count < counts; count++)
-            {
-                try
-                {
-                    // 放置外牆
-                    FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs);
-                    tiles.LookupParameter("長").Set(length);
-                    tiles.LookupParameter("寬").Set(width);
-                    tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
-
-                    vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
-                    vector = GetVectorOffset(vector, length);
-                    location = new XYZ(location.X + vector.X, location.Y + vector.Y, rows);
-
-                    //doc.Regenerate();
-                    //uidoc.RefreshActiveView();
-                }
-                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-            }
-
-            return location;
         }
         /// <summary>
         /// 取得向量偏移的距離
