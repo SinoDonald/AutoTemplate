@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
-using System.Windows.Media;
 
 namespace AutoTemplate
 {
@@ -77,7 +76,7 @@ namespace AutoTemplate
                 trans.Commit();
                 DateTime timeEnd = DateTime.Now; // 計時結束 取得目前時間
                 TimeSpan totalTime = timeEnd - timeStart;
-                TaskDialog.Show("Revit", "完成，耗時：" + totalTime.Minutes + " 分 " + totalTime.Seconds + " 秒。\n\n");
+                //TaskDialog.Show("Revit", "完成，耗時：" + totalTime.Minutes + " 分 " + totalTime.Seconds + " 秒。\n\n");
             }
 
             return Result.Succeeded;
@@ -215,70 +214,155 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-
-                    List<Line> rowLines = new List<Line>(); // 橫向的線
-                    List<Line> colLines = new List<Line>(); // 縱向的線
-                    foreach(CurveLoop curveLoop in face.GetEdgesAsCurveLoops())
+                    // 將Face網格化, 幾何圖形中切割多個三角形, 並於三角形中均勻撒點
+                    int pointCount = ((int)face.Area);
+                    List<XYZ> xyzs = GenerateUniformPoints(face, pointCount);
+                    for (int i = 0; i < xyzs.Count; i++) 
                     {
-                        foreach(Curve curve in curveLoop)
+                        try
                         {
-                            Line line = curve as Line;
-                            if (line.Direction.Z == 1.0 || line.Direction.Z == -1.0) { rowLines.Add(line); }
-                            else { colLines.Add(line); }
+                            Curve curve = Line.CreateBound(xyzs[i], xyzs[i + 1]);
+                            DrawLine(doc, curve);
                         }
+                        catch (Exception) { }
                     }
-                    Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
-                    Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
-                    List<double> heights = rowLines.Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
 
-                    for (int i = 0; i < heights.Count; i++)
-                    {
-                        BoundingBoxUV bboxUV = face.GetBoundingBox();
-                        XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
-                        XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
-                        Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
-                        vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
-                        XYZ minXYZ = new XYZ(startXYZ.X + vector.X, startXYZ.Y + vector.Y, startXYZ.Z + heights[i]); // 預留起始的空間
-                        XYZ maxXYZ = new XYZ(endXYZ.X - vector.X, endXYZ.Y - vector.Y, startXYZ.Z + heights[i + 1]); // 預留結束的空間
+                    //List<Line> rowLines = new List<Line>(); // 橫向的線
+                    //List<Line> colLines = new List<Line>(); // 縱向的線
+                    //foreach(CurveLoop curveLoop in face.GetEdgesAsCurveLoops())
+                    //{
+                    //    foreach(Curve curve in curveLoop)
+                    //    {
+                    //        Line line = curve as Line;
+                    //        if (line.Direction.Z == 1.0 || line.Direction.Z == -1.0) { rowLines.Add(line); }
+                    //        else { colLines.Add(line); }
+                    //    }
+                    //}
+                    //Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
+                    //Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
+                    //List<double> heights = rowLines.Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
 
-                        double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
-                        double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
+                    //for (int i = 0; i < heights.Count; i++)
+                    //{
+                    //    BoundingBoxUV bboxUV = face.GetBoundingBox();
+                    //    XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+                    //    XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+                    //    Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
+                    //    vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
+                    //    XYZ minXYZ = new XYZ(startXYZ.X + vector.X, startXYZ.Y + vector.Y, startXYZ.Z + heights[i]); // 預留起始的空間
+                    //    XYZ maxXYZ = new XYZ(endXYZ.X - vector.X, endXYZ.Y - vector.Y, startXYZ.Z + heights[i + 1]); // 預留結束的空間
 
-                        List<int> sizes = new List<int>() { 300, 200, 100 };
-                        List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
-                        List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
+                    //    double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
+                    //    double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
 
-                        XYZ location = minXYZ;
-                        foreach (LengthOrHeight heightItem in heightList)
-                        {
-                            for (int row = 0; row < heightItem.count; row++)
-                            {
-                                foreach (LengthOrHeight lengthItem in lengthList)
-                                {
-                                    for (int count = 0; count < lengthItem.count; count++)
-                                    {
-                                        try
-                                        {
-                                            FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs); // 放置磁磚
-                                            tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
-                                            tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
-                                            tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+                    //    List<int> sizes = new List<int>() { 300, 200, 100 };
+                    //    List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
+                    //    List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
 
-                                            vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
-                                            vector = GetVectorOffset(vector, lengthItem.heightOrHeight);
-                                            location = new XYZ(location.X + vector.X, location.Y + vector.Y, location.Z);
-                                        }
-                                        catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                                    }
-                                }
-                                location = new XYZ(minXYZ.X, minXYZ.Y, location.Z + heightItem.heightOrHeight);
-                            }
-                        }
-                    }
+                    //    XYZ location = minXYZ;
+                    //    foreach (LengthOrHeight heightItem in heightList)
+                    //    {
+                    //        for (int row = 0; row < heightItem.count; row++)
+                    //        {
+                    //            foreach (LengthOrHeight lengthItem in lengthList)
+                    //            {
+                    //                for (int count = 0; count < lengthItem.count; count++)
+                    //                {
+                    //                    try
+                    //                    {
+                    //                        FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs); // 放置磁磚
+                    //                        tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
+                    //                        tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
+                    //                        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+
+                    //                        vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                    //                        vector = GetVectorOffset(vector, lengthItem.heightOrHeight);
+                    //                        location = new XYZ(location.X + vector.X, location.Y + vector.Y, location.Z);
+                    //                    }
+                    //                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                    //                }
+                    //            }
+                    //            location = new XYZ(minXYZ.X, minXYZ.Y, location.Z + heightItem.heightOrHeight);
+                    //        }
+                    //    }
+                    //}
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
         }
+        private Random _random;
+        public List<XYZ> GenerateUniformPoints(Face face, int pointCount)
+        {
+            _random = new Random();
+
+            List<XYZ> points = new List<XYZ>();
+            Mesh mesh = face.Triangulate();
+
+            // Step 1: 计算每个三角形的面积，并创建累积面积列表
+            List<double> cumulativeAreas = new List<double>();
+            double totalArea = 0.0;
+
+            for (int i = 0; i < mesh.NumTriangles; i++)
+            {
+                MeshTriangle triangle = mesh.get_Triangle(i);
+                double area = CalculateTriangleArea(triangle);
+                totalArea += area;
+                cumulativeAreas.Add(totalArea);
+            }
+
+            // Step 2: 按比例生成点
+            for (int i = 0; i < pointCount; i++)
+            {
+                // 随机选择一个三角形（基于面积加权）
+                double r = _random.NextDouble() * totalArea;
+                int triangleIndex = cumulativeAreas.BinarySearch(r);
+                if (triangleIndex < 0)
+                    triangleIndex = ~triangleIndex;
+
+                MeshTriangle triangle = mesh.get_Triangle(triangleIndex);
+
+                // 在三角形内部生成一个随机点
+                XYZ randomPoint = GenerateRandomPointInTriangle(triangle);
+                points.Add(randomPoint);
+            }
+
+            return points;
+        }
+
+        private double CalculateTriangleArea(MeshTriangle triangle)
+        {
+            XYZ v0 = triangle.get_Vertex(0);
+            XYZ v1 = triangle.get_Vertex(1);
+            XYZ v2 = triangle.get_Vertex(2);
+
+            // 使用叉积计算面积
+            return 0.5 * v1.Subtract(v0).CrossProduct(v2.Subtract(v0)).GetLength();
+        }
+
+        private XYZ GenerateRandomPointInTriangle(MeshTriangle triangle)
+        {
+            XYZ v0 = triangle.get_Vertex(0);
+            XYZ v1 = triangle.get_Vertex(1);
+            XYZ v2 = triangle.get_Vertex(2);
+
+            // 生成两个随机数 u 和 v，以保持 u + v <= 1
+            double u = _random.NextDouble();
+            double v = _random.NextDouble();
+
+            if (u + v > 1)
+            {
+                u = 1 - u;
+                v = 1 - v;
+            }
+
+            // 根据重心坐标计算点的位置
+            return v0 + (v1 - v0) * u + (v2 - v0) * v;
+        }
+
+
+
+
+
         /// <summary>
         /// 面積長度與高度的磁磚尺寸與數量
         /// </summary>
@@ -309,6 +393,23 @@ namespace AutoTemplate
             double length = Math.Sqrt(vector.X * vector.X + vector.Y * vector.Y); // 計算向量長度
             if (length != 0) { vector = new Vector(vector.X / length * newLength, vector.Y / length * newLength); }
             return vector;
+        }
+        /// <summary>
+        /// 3D視圖中畫模型線
+        /// </summary>
+        /// <param name="doc"></param>
+        /// <param name="curve"></param>
+        private void DrawLine(Document doc, Curve curve)
+        {
+            try
+            {
+                Line line = Line.CreateBound(curve.Tessellate()[0], curve.Tessellate()[curve.Tessellate().Count - 1]);
+                XYZ normal = new XYZ(line.Direction.Z - line.Direction.Y, line.Direction.X - line.Direction.Z, line.Direction.Y - line.Direction.X); // 使用與線不平行的任意向量
+                Plane plane = Plane.CreateByNormalAndOrigin(normal, curve.Tessellate()[0]);
+                SketchPlane sketchPlane = SketchPlane.Create(doc, plane);
+                ModelCurve modelCurve = doc.Create.NewModelCurve(line, sketchPlane);
+            }
+            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
         }
         /// <summary>
         /// 關閉警示視窗
