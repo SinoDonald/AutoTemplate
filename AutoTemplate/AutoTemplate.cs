@@ -1,6 +1,7 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
@@ -23,6 +24,12 @@ namespace AutoTemplate
         {
             public int count { get; set; }
             public double heightOrHeight { get; set; }
+        }
+        // 儲存座標點
+        public class Test
+        {
+            public int[,] test { get; set; }
+            public XYZ xyz { get; set; }
         }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -214,18 +221,13 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-                    // 將Face網格化, 幾何圖形中切割多個三角形, 並於三角形中均勻撒點
-                    int pointCount = ((int)face.Area);
-                    List<XYZ> xyzs = GenerateUniformPoints(face, pointCount);
-                    for (int i = 0; i < xyzs.Count; i++) 
+                    List<XYZ> xyzs = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                    for (int i = 0; i < xyzs.Count; i++)
                     {
-                        try
-                        {
-                            Curve curve = Line.CreateBound(xyzs[i], xyzs[i + 1]);
-                            DrawLine(doc, curve);
-                        }
-                        catch (Exception) { }
+                        Curve curve = Line.CreateBound(xyzs[i], xyzs[i + 1]);
+                        if (xyzs[i].Z == xyzs[i + 1].Z && curve.Length <= RevitAPI.ConvertToInternalUnits(100, "millimeters")) { DrawLine(doc, curve); }
                     }
+
 
                     //List<Line> rowLines = new List<Line>(); // 橫向的線
                     //List<Line> colLines = new List<Line>(); // 縱向的線
@@ -290,76 +292,93 @@ namespace AutoTemplate
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
         }
-        private Random _random;
-        public List<XYZ> GenerateUniformPoints(Face face, int pointCount)
+        /// <summary>
+        /// 將Face網格化, 每100cm佈一個點
+        /// </summary>
+        /// <param name="face"></param>
+        /// <returns></returns>
+        public List<XYZ> GenerateUniformPoints(Face face)
         {
-            _random = new Random();
+            List<Test> tests = new List<Test>();
+            List<XYZ> xyzs = new List<XYZ>();
 
-            List<XYZ> points = new List<XYZ>();
-            Mesh mesh = face.Triangulate();
-
-            // Step 1: 计算每个三角形的面积，并创建累积面积列表
-            List<double> cumulativeAreas = new List<double>();
-            double totalArea = 0.0;
-
-            for (int i = 0; i < mesh.NumTriangles; i++)
+            List<CurveLoop> curveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList();
+            curveLoops.RemoveAt(0); // 移除最大的邊界
+            // 儲存所有開口的封閉曲線
+            List<List<Line>> linesList = new List<List<Line>>();
+            foreach(CurveLoop curveLoop in curveLoops)
             {
-                MeshTriangle triangle = mesh.get_Triangle(i);
-                double area = CalculateTriangleArea(triangle);
-                totalArea += area;
-                cumulativeAreas.Add(totalArea);
+                List<Line> lines = new List<Line>();
+                foreach (Curve curve in curveLoop)
+                {
+                    Line line = Line.CreateBound(curve.Tessellate()[0], curve.Tessellate()[curve.Tessellate().Count() - 1]);
+                    lines.Add(line);
+                }
+                linesList.Add(lines);
             }
 
-            // Step 2: 按比例生成点
-            for (int i = 0; i < pointCount; i++)
+            BoundingBoxUV bboxUV = face.GetBoundingBox();
+            XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+            XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+            double offset = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+            double rowDistance = startXYZ.DistanceTo(new XYZ(endXYZ.X, endXYZ.Y, startXYZ.Z));
+            int rowCounts = (int)Math.Ceiling(rowDistance / offset);
+            double colDistance = startXYZ.DistanceTo(new XYZ(startXYZ.X, startXYZ.Y, endXYZ.Z));
+            int colCounts = (int)Math.Ceiling(colDistance / offset);
+            Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
+            vector = GetVectorOffset(vector, offset);
+            XYZ newXYZ = startXYZ;
+            for (int i = 0; i <= colCounts; i++)
             {
-                // 随机选择一个三角形（基于面积加权）
-                double r = _random.NextDouble() * totalArea;
-                int triangleIndex = cumulativeAreas.BinarySearch(r);
-                if (triangleIndex < 0)
-                    triangleIndex = ~triangleIndex;
+                if (i != 0) { newXYZ = new XYZ(startXYZ.X, startXYZ.Y, newXYZ.Z + offset); }
+                for (int j = 0; j <= rowCounts; j++)
+                {
+                    Test test = new Test();
+                    test.test = new int[i, j];
+                    test.xyz = newXYZ;
+                    tests.Add(test);
 
-                MeshTriangle triangle = mesh.get_Triangle(triangleIndex);
-
-                // 在三角形内部生成一个随机点
-                XYZ randomPoint = GenerateRandomPointInTriangle(triangle);
-                points.Add(randomPoint);
+                    bool isInside = true;
+                    foreach(List<Line> lines in linesList)
+                    {
+                        isInside = IsInsideOutline(newXYZ, lines); // 檢查座標點是否在開口內
+                        if (isInside) {  break; } // 在開口內的話則退出, 不儲存座標點
+                    }
+                    if (!isInside) { xyzs.Add(newXYZ); }
+                    newXYZ = new XYZ(newXYZ.X + vector.X, newXYZ.Y + vector.Y, newXYZ.Z);
+                }
             }
 
-            return points;
+            return xyzs;
         }
-
-        private double CalculateTriangleArea(MeshTriangle triangle)
+        /// <summary>
+        /// 檢查座標點是否在開口內
+        /// </summary>
+        /// <param name="xyz"></param>
+        /// <param name="lines"></param>
+        /// <returns></returns>
+        public bool IsInsideOutline(XYZ xyz, List<Line> lines)
         {
-            XYZ v0 = triangle.get_Vertex(0);
-            XYZ v1 = triangle.get_Vertex(1);
-            XYZ v2 = triangle.get_Vertex(2);
-
-            // 使用叉积计算面积
-            return 0.5 * v1.Subtract(v0).CrossProduct(v2.Subtract(v0)).GetLength();
-        }
-
-        private XYZ GenerateRandomPointInTriangle(MeshTriangle triangle)
-        {
-            XYZ v0 = triangle.get_Vertex(0);
-            XYZ v1 = triangle.get_Vertex(1);
-            XYZ v2 = triangle.get_Vertex(2);
-
-            // 生成两个随机数 u 和 v，以保持 u + v <= 1
-            double u = _random.NextDouble();
-            double v = _random.NextDouble();
-
-            if (u + v > 1)
+            bool result = true;
+            int insertCount = 0;
+            Line rayLine = Line.CreateBound(xyz, xyz.Add(XYZ.BasisX * 1000));
+            foreach (var arealine in lines)
             {
-                u = 1 - u;
-                v = 1 - v;
+                SetComparisonResult interResult = arealine.Intersect(rayLine, out IntersectionResultArray resultArray);
+                IntersectionResult insPoint = resultArray?.get_Item(0);
+                if (insPoint != null)
+                {
+                    insertCount++;
+                }
+            }
+            // 如果次數為偶數就在外面, 奇數就在裡面
+            if(insertCount % 2 == 0)
+            {
+                return result = false;
             }
 
-            // 根据重心坐标计算点的位置
-            return v0 + (v1 - v0) * u + (v2 - v0) * v;
+            return result;
         }
-
-
 
 
 
