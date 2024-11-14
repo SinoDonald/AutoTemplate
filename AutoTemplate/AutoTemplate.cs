@@ -26,10 +26,19 @@ namespace AutoTemplate
             public double heightOrHeight { get; set; }
         }
         // 儲存座標點
-        public class Test
+        public class PointToMatrix
         {
-            public int[,] test { get; set; }
+            public int cols { get; set; }
+            public int rows { get; set; }
             public XYZ xyz { get; set; }
+            public int isRectangle { get; set; }
+        }
+        // 最大矩形資訊結構
+        public class Rectangle
+        {
+            public int MaxArea { get; set; }
+            public (int Row, int Col) TopLeft { get; set; }
+            public (int Row, int Col) BottomRight { get; set; }
         }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -221,12 +230,29 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-                    List<XYZ> xyzs = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
-                    for (int i = 0; i < xyzs.Count; i++)
-                    {
-                        Curve curve = Line.CreateBound(xyzs[i], xyzs[i + 1]);
-                        if (xyzs[i].Z == xyzs[i + 1].Z && curve.Length <= RevitAPI.ConvertToInternalUnits(100, "millimeters")) { DrawLine(doc, curve); }
-                    }
+                    (List<XYZ>, List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                    List<XYZ> xyzs = pointToMatrix.Item1;
+                    List<PointToMatrix> pointToMatrixs = pointToMatrix.Item2;
+                    int rows = pointToMatrix.Item3;
+                    int cols = pointToMatrix.Item4;
+                    SaveRectangle(doc, rows, cols, pointToMatrixs);
+
+                    //XYZ startPoint = pointToMatrixs.Where(x => x.rows == rectangle.TopLeft.Row && x.cols == rectangle.TopLeft.Col).Select(x => x.xyz).FirstOrDefault();
+                    //XYZ endPoint = pointToMatrixs.Where(x => x.rows == rectangle.BottomRight.Row && x.cols == rectangle.BottomRight.Col).Select(x => x.xyz).FirstOrDefault();
+                    //List<Curve> curves = new List<Curve>();
+                    //curves.Add(Line.CreateBound(startPoint, new XYZ(endPoint.X, endPoint.Y, startPoint.Z)));
+                    //curves.Add(Line.CreateBound(new XYZ(endPoint.X, endPoint.Y, startPoint.Z), endPoint));
+                    //curves.Add(Line.CreateBound(endPoint, new XYZ(startPoint.X, startPoint.Y, endPoint.Z)));
+                    //curves.Add(Line.CreateBound(new XYZ(startPoint.X, startPoint.Y, endPoint.Z), startPoint));
+                    //foreach (Curve curve in curves) { DrawLine(doc, curve); }
+
+
+
+
+
+
+
+
 
 
                     //List<Line> rowLines = new List<Line>(); // 橫向的線
@@ -297,9 +323,9 @@ namespace AutoTemplate
         /// </summary>
         /// <param name="face"></param>
         /// <returns></returns>
-        public List<XYZ> GenerateUniformPoints(Face face)
+        public (List<XYZ>, List<PointToMatrix>, int, int) GenerateUniformPoints(Face face)
         {
-            List<Test> tests = new List<Test>();
+            List<PointToMatrix> pointToMatrixs = new List<PointToMatrix>();
             List<XYZ> xyzs = new List<XYZ>();
 
             List<CurveLoop> curveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList();
@@ -321,35 +347,39 @@ namespace AutoTemplate
             XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
             XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
             double offset = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-            double rowDistance = startXYZ.DistanceTo(new XYZ(endXYZ.X, endXYZ.Y, startXYZ.Z));
-            int rowCounts = (int)Math.Ceiling(rowDistance / offset);
-            double colDistance = startXYZ.DistanceTo(new XYZ(startXYZ.X, startXYZ.Y, endXYZ.Z));
-            int colCounts = (int)Math.Ceiling(colDistance / offset);
+            double height = startXYZ.DistanceTo(new XYZ(startXYZ.X, startXYZ.Y, endXYZ.Z));
+            int rows = (int)Math.Ceiling(height / offset);
+            double length = startXYZ.DistanceTo(new XYZ(endXYZ.X, endXYZ.Y, startXYZ.Z));
+            int cols = (int)Math.Ceiling(length / offset);
             Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
             vector = GetVectorOffset(vector, offset);
             XYZ newXYZ = startXYZ;
-            for (int i = 0; i <= colCounts; i++)
+            for (int i = 0; i < rows; i++)
             {
                 if (i != 0) { newXYZ = new XYZ(startXYZ.X, startXYZ.Y, newXYZ.Z + offset); }
-                for (int j = 0; j <= rowCounts; j++)
+                for (int j = 0; j < cols; j++)
                 {
-                    Test test = new Test();
-                    test.test = new int[i, j];
-                    test.xyz = newXYZ;
-                    tests.Add(test);
-
+                    PointToMatrix pointToMatrix = new PointToMatrix();
+                    pointToMatrix.rows = i;
+                    pointToMatrix.cols = j;
+                    pointToMatrix.xyz = newXYZ;
+                    pointToMatrix.isRectangle = 1;
                     bool isInside = true;
                     foreach(List<Line> lines in linesList)
                     {
                         isInside = IsInsideOutline(newXYZ, lines); // 檢查座標點是否在開口內
-                        if (isInside) {  break; } // 在開口內的話則退出, 不儲存座標點
+                        if (isInside) { pointToMatrix.isRectangle = 0; break; } // 在開口內的話則退出, 不儲存座標點
                     }
-                    if (!isInside) { xyzs.Add(newXYZ); }
+                    //if (!isInside) 
+                    //{ 
+                        xyzs.Add(newXYZ); 
+                    //}
+                    pointToMatrixs.Add(pointToMatrix);
                     newXYZ = new XYZ(newXYZ.X + vector.X, newXYZ.Y + vector.Y, newXYZ.Z);
                 }
             }
 
-            return xyzs;
+            return (xyzs, pointToMatrixs, rows, cols);
         }
         /// <summary>
         /// 檢查座標點是否在開口內
@@ -379,6 +409,107 @@ namespace AutoTemplate
 
             return result;
         }
+        private void SaveRectangle(Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs)
+        {
+            List<Rectangle> rectangles = new List<Rectangle>();
+            // 假設 1 表示矩形的一部分，0 表示空白
+            int[,] grid = new int[rows, cols];
+            int count = 0;
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    grid[i, j] = pointToMatrixs[count].isRectangle;
+                    count++;
+                }
+            }
+            Rectangle rectangle = MaximalRectangle(grid);
+        }
+        /// <summary>
+        /// 計算最大矩形面積並返回位置
+        /// </summary>
+        /// <param name="matrix"></param>
+        /// <returns></returns>
+        public static Rectangle MaximalRectangle(int[,] matrix)
+        {
+            if (matrix == null || matrix.Length == 0) return null;
+
+            int rows = matrix.GetLength(0);
+            int cols = matrix.GetLength(1);
+            int[] heights = new int[cols];
+
+            int maxArea = 0;
+            (int Row, int Col) topLeft = (0, 0);
+            (int Row, int Col) bottomRight = (0, 0);
+
+            for (int row = 0; row < rows; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    heights[col] = (matrix[row, col] == 1) ? heights[col] + 1 : 0;
+                }
+
+                var (area, startCol, endCol, height) = LargestRectangleAreaWithPosition(heights);
+                if (area > maxArea)
+                {
+                    maxArea = area;
+                    topLeft = (row - height + 1, startCol);
+                    bottomRight = (row, endCol);
+                }
+            }
+
+            return new Rectangle
+            {
+                MaxArea = maxArea,
+                TopLeft = topLeft,
+                BottomRight = bottomRight
+            };
+        }
+        /// <summary>
+        /// 使用單調棧計算柱狀圖的最大矩形面積和位置
+        /// </summary>
+        /// <param name="heights"></param>
+        /// <returns></returns>
+        private static (int Area, int StartCol, int EndCol, int Height) LargestRectangleAreaWithPosition(int[] heights)
+        {
+            Stack<int> stack = new Stack<int>();
+            int maxArea = 0;
+            int startCol = 0;
+            int endCol = 0;
+            int height = 0;
+
+            for (int i = 0; i <= heights.Length; i++)
+            {
+                int h = (i == heights.Length) ? 0 : heights[i];
+                while (stack.Count > 0 && h < heights[stack.Peek()])
+                {
+                    height = heights[stack.Pop()];
+                    int width = (stack.Count == 0) ? i : i - stack.Peek() - 1;
+                    int area = height * width;
+
+                    if (area > maxArea)
+                    {
+                        maxArea = area;
+                        startCol = (stack.Count == 0) ? 0 : stack.Peek() + 1;
+                        endCol = i - 1;
+                    }
+                }
+                stack.Push(i);
+            }
+
+            return (maxArea, startCol, endCol, height);
+        }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
