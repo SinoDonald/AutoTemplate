@@ -235,16 +235,9 @@ namespace AutoTemplate
                     List<PointToMatrix> pointToMatrixs = pointToMatrix.Item2;
                     int rows = pointToMatrix.Item3;
                     int cols = pointToMatrix.Item4;
-                    SaveRectangle(doc, rows, cols, pointToMatrixs);
 
-                    //XYZ startPoint = pointToMatrixs.Where(x => x.rows == rectangle.TopLeft.Row && x.cols == rectangle.TopLeft.Col).Select(x => x.xyz).FirstOrDefault();
-                    //XYZ endPoint = pointToMatrixs.Where(x => x.rows == rectangle.BottomRight.Row && x.cols == rectangle.BottomRight.Col).Select(x => x.xyz).FirstOrDefault();
-                    //List<Curve> curves = new List<Curve>();
-                    //curves.Add(Line.CreateBound(startPoint, new XYZ(endPoint.X, endPoint.Y, startPoint.Z)));
-                    //curves.Add(Line.CreateBound(new XYZ(endPoint.X, endPoint.Y, startPoint.Z), endPoint));
-                    //curves.Add(Line.CreateBound(endPoint, new XYZ(startPoint.X, startPoint.Y, endPoint.Z)));
-                    //curves.Add(Line.CreateBound(new XYZ(startPoint.X, startPoint.Y, endPoint.Z), startPoint));
-                    //foreach (Curve curve in curves) { DrawLine(doc, curve); }
+                    List<Rectangle> rectangles = new List<Rectangle>();
+                    SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles);
 
 
 
@@ -409,9 +402,8 @@ namespace AutoTemplate
 
             return result;
         }
-        private void SaveRectangle(Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs)
+        private void SaveRectangle(Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs, List<Rectangle> rectangles)
         {
-            List<Rectangle> rectangles = new List<Rectangle>();
             // 假設 1 表示矩形的一部分，0 表示空白
             int[,] grid = new int[rows, cols];
             int count = 0;
@@ -424,6 +416,27 @@ namespace AutoTemplate
                 }
             }
             Rectangle rectangle = MaximalRectangle(grid);
+            rectangles.Add(rectangle);
+            for(int i = rectangle.TopLeft.Row; i < rectangle.BottomRight.Row; i++)
+            {
+                for(int j = rectangle.TopLeft.Col;  j < rectangle.BottomRight.Col; j++)
+                {
+                    PointToMatrix pointToMatrix = pointToMatrixs.Where(x => x.rows == i && x.cols == j).FirstOrDefault();
+                    pointToMatrix.isRectangle = 0;
+                }
+            }
+
+            XYZ startPoint = pointToMatrixs.Where(x => x.rows == rectangle.TopLeft.Row && x.cols == rectangle.TopLeft.Col).Select(x => x.xyz).FirstOrDefault();
+            XYZ endPoint = pointToMatrixs.Where(x => x.rows == rectangle.BottomRight.Row && x.cols == rectangle.BottomRight.Col).Select(x => x.xyz).FirstOrDefault();
+            List<Curve> curves = new List<Curve>();
+            curves.Add(Line.CreateBound(startPoint, new XYZ(endPoint.X, endPoint.Y, startPoint.Z)));
+            curves.Add(Line.CreateBound(new XYZ(endPoint.X, endPoint.Y, startPoint.Z), endPoint));
+            curves.Add(Line.CreateBound(endPoint, new XYZ(startPoint.X, startPoint.Y, endPoint.Z)));
+            curves.Add(Line.CreateBound(new XYZ(startPoint.X, startPoint.Y, endPoint.Z), startPoint));
+            foreach (Curve curve in curves) { DrawLine(doc, curve); }
+
+            int isRectangle = pointToMatrixs.Where(x => x.isRectangle == 1).ToList().Count;
+            if(isRectangle > 0) { SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles); }
         }
         /// <summary>
         /// 計算最大矩形面積並返回位置
