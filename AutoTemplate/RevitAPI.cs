@@ -17,8 +17,8 @@ namespace AutoTemplate
         //public static string picPath = Path.Combine(@"C:\ProgramData\Autodesk\Revit\Addins\2020\AutoSign", "Pic"); // 圖片路徑
         public Result OnStartup(UIControlledApplication a)
         {
-            string autoSignPath = Path.Combine(Directory.GetParent(addinAssmeblyPath).FullName, "AutoTemplate.dll");
-            //string autoSignPath = Path.Combine(@"C:\ProgramData\Autodesk\Revit\Addins\2020\AutoSign", "AutoSign.dll");
+            string autoTemplatePath = Path.Combine(Directory.GetParent(addinAssmeblyPath).FullName, "AutoTemplate.dll");
+            //string autoSignPath = Path.Combine(@"C:\ProgramData\Autodesk\Revit\Addins\2020\AutoSign", "AutoTemplate.dll");
             RibbonPanel ribbonPanel = null;
             try { a.CreateRibbonTab("自動放置模板"); } catch { }
             try { ribbonPanel = a.CreateRibbonPanel("自動放置模板", "模板建置"); }
@@ -34,8 +34,8 @@ namespace AutoTemplate
                     }
                 }
             }
-            //PushButton autoPutBtn = ribbonPanel.AddItem(new PushButtonData("AutoPut", "自動佈設", autoSignPath, "AutoSign.AutoPut")) as PushButton;
-            //autoPutBtn.LargeImage = convertFromBitmap(Properties.Resources.自動佈設);
+            PushButton autoPutBtn = ribbonPanel.AddItem(new PushButtonData("AutoTemplate", "模板建置", autoTemplatePath, "AutoTemplate.AutoTemplate")) as PushButton;
+            autoPutBtn.LargeImage = convertFromBitmap(Properties.Resources.模板建置);
 
             return Result.Succeeded;
         }

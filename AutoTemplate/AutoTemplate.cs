@@ -6,6 +6,7 @@ using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Windows;
 
 namespace AutoTemplate
@@ -40,6 +41,12 @@ namespace AutoTemplate
             public (int Row, int Col) TopLeft { get; set; }
             public (int Row, int Col) BottomRight { get; set; }
         }
+        // 干涉的元件
+        public class IntersectionElem
+        {
+            public Element hostElem = null;
+            public List<Element> elemList = new List<Element>();
+        }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             UIApplication uiapp = commandData.Application;
@@ -49,6 +56,8 @@ namespace AutoTemplate
 
             DateTime timeStart = DateTime.Now; // 計時開始 取得目前時間
 
+            // 儲存所有柱
+            List<Element> columns = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Columns).WhereElementIsNotElementType().ToList();
             // 取得所有的牆
             List<Wall> walls = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().Cast<Wall>().ToList();
             using (Transaction trans = new Transaction(doc, "自動放置模板"))
@@ -70,24 +79,74 @@ namespace AutoTemplate
                 }
                 FamilySymbol fs = familySymbolList.FirstOrDefault();
 
-                foreach (Wall wall in walls)
+                // 找到邊界外圍框
+                // 查詢所有柱牆的Element
+                List<Element> elems = ColumnsAndWallsElem(doc);
+                // ElementId第一個有接觸到的所有元件
+                List<IntersectionElem> list = IntersectGroup(doc, elems);
+                List<Solid> solids = new List<Solid>(); // 儲存所有柱牆的Solid                
+                foreach (Element elem in elems) { foreach(Solid solid in GetSolids(doc, elem)) {solids.Add(solid); } }                
+                Solid hostSolid = UnionSolids(solids, solids[0]); // 將所有Solid聯集
+
+                List<Curve> curveList = new List<Curve>();
+                if (null != hostSolid)
                 {
-                    List<Solid> wallSolids = GetSolids(doc, wall);
-                    List<Face> wallFaces = GetFaces(wallSolids, "side");
-                    Level level = doc.GetElement(wall.LevelId) as Level;
-                    try
+                    foreach (Face face in hostSolid.Faces)
                     {
-                        if (level != null)
+                        PlanarFace pf = face as PlanarFace;
+                        //if (null != pf && pf.Normal.IsAlmostEqualTo(XYZ.BasisZ))
+                        if (null != pf && pf.FaceNormal.IsAlmostEqualTo(XYZ.BasisZ))
                         {
-                            // 在這個位置創建長方形
-                            IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
-                            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
-                            //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
-                            //CalculateGeom(uidoc, doc, interiorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
+                            EdgeArrayArray loops = pf.EdgeLoops;
+                            foreach (EdgeArray loop in loops)
+                            {
+                                CurveArray curves = app.Create.NewCurveArray();
+                                foreach (Edge edge in loop)
+                                {
+                                    IList<XYZ> edgePoints = edge.Tessellate();
+                                    Arc arc = null;
+                                    if (edgePoints.Count > 2)
+                                    {
+                                        arc = Arc.Create(edgePoints[0], edgePoints[edgePoints.Count - 1], edgePoints[1]);
+                                        if (arc != null)
+                                        {
+                                            curves.Append(arc);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Line line = Line.CreateBound(edgePoints[0], edgePoints[1]);
+                                        curves.Append(line);
+                                        Curve curve = Line.CreateBound(edgePoints[0], edgePoints[1]);
+                                        curveList.Add(curve);
+                                    }
+                                }
+                            }
                         }
                     }
-                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
                 }
+
+                foreach(Curve curve in curveList) { DrawLine(doc, curve); }
+                
+
+                //foreach (Wall wall in walls)
+                //{
+                //    List<Solid> wallSolids = GetSolids(doc, wall);
+                //    List<Face> wallFaces = GetFaces(wallSolids, "side");
+                //    Level level = doc.GetElement(wall.LevelId) as Level;
+                //    try
+                //    {
+                //        if (level != null)
+                //        {
+                //            // 在這個位置創建長方形
+                //            IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
+                //            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
+                //            //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
+                //            //CalculateGeom(uidoc, doc, interiorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
+                //        }
+                //    }
+                //    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                //}
 
                 trans.Commit();
                 DateTime timeEnd = DateTime.Now; // 計時結束 取得目前時間
@@ -96,6 +155,74 @@ namespace AutoTemplate
             }
 
             return Result.Succeeded;
+        }
+        // 查詢所有柱牆的Element
+        private List<Element> ColumnsAndWallsElem(Document doc)
+        {
+            List<Element> elems = new List<Element>();
+
+            ElementCategoryFilter columnsFilter = new ElementCategoryFilter(BuiltInCategory.OST_Columns);
+            ElementCategoryFilter wallsFilter = new ElementCategoryFilter(BuiltInCategory.OST_Walls);
+            LogicalOrFilter filter = new LogicalOrFilter(columnsFilter, wallsFilter);
+            elems = new FilteredElementCollector(doc).WherePasses(filter).WhereElementIsNotElementType().ToElements().ToList();
+
+            return elems;
+        }
+        //  ElementId第一個有接觸到的所有元件
+        private List<IntersectionElem> IntersectGroup(Document doc, List<Element> elems)
+        {
+            List<IntersectionElem> list = new List<IntersectionElem>();
+            IntersectionElem intersectionElem = new IntersectionElem();
+
+            foreach (Element elem in elems)
+            {
+                List<Element> elemList = new List<Element>();
+                intersectionElem = new IntersectionElem();
+
+                // 找到選取元件的輪廓線
+                View3D view3D = new FilteredElementCollector(doc).OfClass(typeof(View3D)).WhereElementIsNotElementType().Cast<View3D>().Where(x => x.Name.Equals("{3D}")).FirstOrDefault();
+                // 創建BoundingBoxIntersectsFilter找到其他與之交接的元件
+                BoundingBoxIntersectsFilter bbFilter = new BoundingBoxIntersectsFilter(new Outline(elem.get_BoundingBox(view3D).Min, elem.get_BoundingBox(view3D).Max));
+                // 排除點選元件本身
+                ICollection<ElementId> idsExclude = new List<ElementId>() { elem.Id };
+                // 存放到容器內, 兩個都是快篩, 所以順序不重要  
+                elemList = new FilteredElementCollector(doc/*, doc.ActiveView.Id*/).Excluding(idsExclude).WherePasses(bbFilter).WhereElementIsNotElementType().ToElements().ToList();
+                intersectionElem.hostElem = elem;
+                intersectionElem.elemList = elemList;
+                list.Add(intersectionElem);
+            }
+
+            string info = string.Empty;
+            foreach (IntersectionElem abc in list)
+            {
+                info += "\nHostId : " + abc.hostElem.Id + "\nIntersect : ";
+                foreach (Element e in abc.elemList)
+                {
+                    info += "\n" + e.Id;
+                }
+                info += "\n";
+            }
+
+            return list;
+        }
+        // 將所有Solid聯集
+        private Solid UnionSolids(IList<Solid> solids, Solid hostSolid)
+        {
+            Solid unionSolid = null;
+            foreach (Solid subSolid in solids)
+            {
+                if (subSolid.Volume > 0)
+                {
+                    try
+                    {
+                        unionSolid = BooleanOperationsUtils.ExecuteBooleanOperation(hostSolid, subSolid, BooleanOperationsType.Union);
+                        hostSolid = unionSolid;
+                    }
+                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                }
+            }
+
+            return hostSolid;
         }
         /// <summary>
         /// 儲存所有Solid
