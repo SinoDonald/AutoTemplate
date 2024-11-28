@@ -1,12 +1,10 @@
 ﻿using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
-using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Windows;
 
 namespace AutoTemplate
@@ -80,54 +78,86 @@ namespace AutoTemplate
                 FamilySymbol fs = familySymbolList.FirstOrDefault();
 
                 // 找到邊界外圍框
-                // 查詢所有柱牆的Element
-                List<Element> elems = ColumnsAndWallsElem(doc);
-                // ElementId第一個有接觸到的所有元件
-                List<IntersectionElem> list = IntersectGroup(doc, elems);
+                List<Element> elems = ColumnsAndWallsElems(doc); // 查詢所有柱牆的Element                
+                List<IntersectionElem> list = IntersectGroup(doc, elems); // ElementId第一個有接觸到的所有元件
                 List<Solid> solids = new List<Solid>(); // 儲存所有柱牆的Solid                
-                foreach (Element elem in elems) { foreach(Solid solid in GetSolids(doc, elem)) {solids.Add(solid); } }                
+                foreach (Element elem in elems) { foreach(Solid solid in GetSolids(doc, elem)) { solids.Add(solid); } }                
                 Solid hostSolid = UnionSolids(solids, solids[0]); // 將所有Solid聯集
 
+                List<Curve> sideFaceCurves = new List<Curve>();
                 List<Curve> curveList = new List<Curve>();
+                Face maxFace = null;
                 if (null != hostSolid)
                 {
+                    List<Face> sideFaces = new List<Face>();
                     foreach (Face face in hostSolid.Faces)
                     {
                         PlanarFace pf = face as PlanarFace;
-                        //if (null != pf && pf.Normal.IsAlmostEqualTo(XYZ.BasisZ))
-                        if (null != pf && pf.FaceNormal.IsAlmostEqualTo(XYZ.BasisZ))
+                        if (null != pf && pf.FaceNormal.IsAlmostEqualTo(-XYZ.BasisZ))
                         {
-                            EdgeArrayArray loops = pf.EdgeLoops;
-                            foreach (EdgeArray loop in loops)
+                            if(maxFace == null) { maxFace = face; }
+                            else { if (face.Area > maxFace.Area) { maxFace = face; } }
+                        }
+                        if (null != pf && !pf.FaceNormal.IsAlmostEqualTo(XYZ.BasisZ) && !pf.FaceNormal.IsAlmostEqualTo(-XYZ.BasisZ))
+                        {
+                            sideFaces.Add(face);
+                        }
+                    }
+                    foreach (EdgeArray edgeArray in maxFace.EdgeLoops)
+                    {
+                        foreach (Edge edge in edgeArray)
+                        {
+                            Curve curve = edge.AsCurveFollowingFace(maxFace);
+                            try { curveList.Add(curve); }
+                            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                        }
+                    }
+                    foreach(Face sideFace in sideFaces)
+                    {
+                        foreach (EdgeArray edgeArray in sideFace.EdgeLoops)
+                        {
+                            foreach (Edge edge in edgeArray)
                             {
-                                CurveArray curves = app.Create.NewCurveArray();
-                                foreach (Edge edge in loop)
+                                Curve curve = edge.AsCurveFollowingFace(sideFace);
+                                try 
                                 {
-                                    IList<XYZ> edgePoints = edge.Tessellate();
-                                    Arc arc = null;
-                                    if (edgePoints.Count > 2)
-                                    {
-                                        arc = Arc.Create(edgePoints[0], edgePoints[edgePoints.Count - 1], edgePoints[1]);
-                                        if (arc != null)
-                                        {
-                                            curves.Append(arc);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        Line line = Line.CreateBound(edgePoints[0], edgePoints[1]);
-                                        curves.Append(line);
-                                        Curve curve = Line.CreateBound(edgePoints[0], edgePoints[1]);
-                                        curveList.Add(curve);
-                                    }
+                                    Curve sameCurve = sideFaceCurves.Where(x => x.Tessellate()[0].X == curve.Tessellate()[0].X &&
+                                                                                x.Tessellate()[0].Y == curve.Tessellate()[0].Y && 
+                                                                                x.Tessellate()[0].Z == curve.Tessellate()[0].Z && 
+                                                                                x.Tessellate()[1].X == curve.Tessellate()[1].X &&
+                                                                                x.Tessellate()[1].Y == curve.Tessellate()[1].Y &&
+                                                                                x.Tessellate()[1].Z == curve.Tessellate()[1].Z).FirstOrDefault(); 
+                                    if (sameCurve == null) { sideFaceCurves.Add(curve); }
                                 }
+                                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
                             }
                         }
                     }
                 }
+                foreach(Curve curve in curveList) { DrawLine(doc, curve); } // 3D視圖中畫模型線
 
-                foreach(Curve curve in curveList) { DrawLine(doc, curve); }
-                
+                // 計算轉角的邊
+                List<XYZ> intersectXYZs = new List<XYZ>();
+                for(int i = 0; i < curveList.Count - 1; i++)
+                {
+                    bool arePerpendicular = AreCurvesPerpendicular(curveList[i], curveList[i + 1]);
+                    if (arePerpendicular)
+                    {
+                        XYZ startXYZ = curveList[i].Tessellate()[0];
+                        XYZ sameXYZ = intersectXYZs.Where(x => x.X == startXYZ.X && x.Y == startXYZ.Y && x.Z == startXYZ.Z).FirstOrDefault();
+                        if (sameXYZ == null) { intersectXYZs.Add(startXYZ); } 
+                    }
+                }
+                intersectXYZs = intersectXYZs.Distinct().ToList();
+                foreach (XYZ intersectXYZ in intersectXYZs)
+                {
+                    //FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural); // 放置磁磚
+                    try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
+                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                    //tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
+                    //tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
+                    //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+                }
 
                 //foreach (Wall wall in walls)
                 //{
@@ -157,7 +187,7 @@ namespace AutoTemplate
             return Result.Succeeded;
         }
         // 查詢所有柱牆的Element
-        private List<Element> ColumnsAndWallsElem(Document doc)
+        private List<Element> ColumnsAndWallsElems(Document doc)
         {
             List<Element> elems = new List<Element>();
 
@@ -190,17 +220,6 @@ namespace AutoTemplate
                 intersectionElem.hostElem = elem;
                 intersectionElem.elemList = elemList;
                 list.Add(intersectionElem);
-            }
-
-            string info = string.Empty;
-            foreach (IntersectionElem abc in list)
-            {
-                info += "\nHostId : " + abc.hostElem.Id + "\nIntersect : ";
-                foreach (Element e in abc.elemList)
-                {
-                    info += "\n" + e.Id;
-                }
-                info += "\n";
             }
 
             return list;
@@ -342,6 +361,41 @@ namespace AutoTemplate
             saveFamilySymbols = saveFamilySymbols.OrderBy(x => x.Family.Name).ToList(); // 排序
             return saveFamilySymbols;
         }
+        public static bool AreCurvesPerpendicular(Curve curve1, Curve curve2, double tolerance = 1e-9)
+        {
+            // 獲取兩條曲線的方向向量
+            XYZ direction1 = GetCurveDirection(curve1);
+            XYZ direction2 = GetCurveDirection(curve2);
+
+            if (direction1 == null || direction2 == null)
+            {
+                throw new ArgumentException("曲線類型不支持計算方向向量");
+            }
+
+            // 計算點積
+            double dotProduct = direction1.DotProduct(direction2);
+
+            // 檢查點積是否接近 0
+            return Math.Abs(dotProduct) < tolerance;
+        }
+        private static XYZ GetCurveDirection(Curve curve)
+        {
+            if (curve is Line line)
+            {
+                // 對於直線，使用起點和終點計算方向
+                return (line.GetEndPoint(1) - line.GetEndPoint(0)).Normalize();
+            }
+            else if (curve is Arc arc)
+            {
+                // 對於弧線，取起點和弧線上的中點計算方向
+                XYZ startPoint = arc.GetEndPoint(0);
+                XYZ midPoint = arc.Evaluate(0.5, true); // 弧線的中間點
+                return (midPoint - startPoint).Normalize();
+            }
+
+            // 其他類型的曲線不支持
+            return null;
+        }
         /// <summary>
         /// 計算放置各尺寸的數量
         /// </summary>
@@ -363,77 +417,72 @@ namespace AutoTemplate
                     int rows = pointToMatrix.Item3;
                     int cols = pointToMatrix.Item4;
 
-                    List<Rectangle> rectangles = new List<Rectangle>();
-                    SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles);
+
+                    // 分割幾何圖形成n個矩形
+                    //List<Rectangle> rectangles = new List<Rectangle>();
+                    //SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles);
 
 
+                    // 放置磁磚
+                    List<Line> rowLines = new List<Line>(); // 橫向的線
+                    List<Line> colLines = new List<Line>(); // 縱向的線
+                    foreach (CurveLoop curveLoop in face.GetEdgesAsCurveLoops())
+                    {
+                        foreach (Curve curve in curveLoop)
+                        {
+                            Line line = curve as Line;
+                            if (line.Direction.Z == 1.0 || line.Direction.Z == -1.0) { rowLines.Add(line); }
+                            else { colLines.Add(line); }
+                        }
+                    }
+                    Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
+                    Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
+                    List<double> heights = rowLines.Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
 
+                    for (int i = 0; i < heights.Count; i++)
+                    {
+                        BoundingBoxUV bboxUV = face.GetBoundingBox();
+                        XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+                        XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+                        Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
+                        vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
+                        XYZ minXYZ = new XYZ(startXYZ.X + vector.X, startXYZ.Y + vector.Y, startXYZ.Z + heights[i]); // 預留起始的空間
+                        XYZ maxXYZ = new XYZ(endXYZ.X - vector.X, endXYZ.Y - vector.Y, startXYZ.Z + heights[i + 1]); // 預留結束的空間
 
+                        double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
+                        double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
 
+                        List<int> sizes = new List<int>() { 300, 200, 100 };
+                        List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
+                        List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
 
+                        XYZ location = minXYZ;
+                        foreach (LengthOrHeight heightItem in heightList)
+                        {
+                            for (int row = 0; row < heightItem.count; row++)
+                            {
+                                foreach (LengthOrHeight lengthItem in lengthList)
+                                {
+                                    for (int count = 0; count < lengthItem.count; count++)
+                                    {
+                                        try
+                                        {
+                                            FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs); // 放置磁磚
+                                            tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
+                                            tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
+                                            tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
 
-
-
-
-                    //List<Line> rowLines = new List<Line>(); // 橫向的線
-                    //List<Line> colLines = new List<Line>(); // 縱向的線
-                    //foreach(CurveLoop curveLoop in face.GetEdgesAsCurveLoops())
-                    //{
-                    //    foreach(Curve curve in curveLoop)
-                    //    {
-                    //        Line line = curve as Line;
-                    //        if (line.Direction.Z == 1.0 || line.Direction.Z == -1.0) { rowLines.Add(line); }
-                    //        else { colLines.Add(line); }
-                    //    }
-                    //}
-                    //Line bottomLine = rowLines.OrderBy(x => x.Origin.Z).FirstOrDefault(); // 最底的邊
-                    //Line topLine = rowLines.OrderByDescending(x => x.Origin.Z).FirstOrDefault(); // 最高的邊
-                    //List<double> heights = rowLines.Select(x => x.Origin.Z - bottomLine.Origin.Z).Distinct().OrderBy(x => x).ToList();
-
-                    //for (int i = 0; i < heights.Count; i++)
-                    //{
-                    //    BoundingBoxUV bboxUV = face.GetBoundingBox();
-                    //    XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
-                    //    XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
-                    //    Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
-                    //    vector = GetVectorOffset(vector, RevitAPI.ConvertToInternalUnits(100, "millimeters"));
-                    //    XYZ minXYZ = new XYZ(startXYZ.X + vector.X, startXYZ.Y + vector.Y, startXYZ.Z + heights[i]); // 預留起始的空間
-                    //    XYZ maxXYZ = new XYZ(endXYZ.X - vector.X, endXYZ.Y - vector.Y, startXYZ.Z + heights[i + 1]); // 預留結束的空間
-
-                    //    double wallHeight = minXYZ.DistanceTo(new XYZ(minXYZ.X, minXYZ.Y, maxXYZ.Z)); // 牆高度
-                    //    double wallLength = minXYZ.DistanceTo(new XYZ(maxXYZ.X, maxXYZ.Y, minXYZ.Z)); // 牆長度
-
-                    //    List<int> sizes = new List<int>() { 300, 200, 100 };
-                    //    List<LengthOrHeight> heightList = LengthAndHeightTiles(wallHeight, sizes); // 面積長度的磁磚尺寸與數量
-                    //    List<LengthOrHeight> lengthList = LengthAndHeightTiles(wallLength, sizes); // 面積高度的磁磚尺寸與數量
-
-                    //    XYZ location = minXYZ;
-                    //    foreach (LengthOrHeight heightItem in heightList)
-                    //    {
-                    //        for (int row = 0; row < heightItem.count; row++)
-                    //        {
-                    //            foreach (LengthOrHeight lengthItem in lengthList)
-                    //            {
-                    //                for (int count = 0; count < lengthItem.count; count++)
-                    //                {
-                    //                    try
-                    //                    {
-                    //                        FamilyInstance tiles = doc.Create.NewFamilyInstance(referenceFace, location, XYZ.Zero, fs); // 放置磁磚
-                    //                        tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
-                    //                        tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
-                    //                        tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
-
-                    //                        vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
-                    //                        vector = GetVectorOffset(vector, lengthItem.heightOrHeight);
-                    //                        location = new XYZ(location.X + vector.X, location.Y + vector.Y, location.Z);
-                    //                    }
-                    //                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                    //                }
-                    //            }
-                    //            location = new XYZ(minXYZ.X, minXYZ.Y, location.Z + heightItem.heightOrHeight);
-                    //        }
-                    //    }
-                    //}
+                                            vector = new Vector(maxXYZ.X - minXYZ.X, maxXYZ.Y - minXYZ.Y); // 方向向量
+                                            vector = GetVectorOffset(vector, lengthItem.heightOrHeight);
+                                            location = new XYZ(location.X + vector.X, location.Y + vector.Y, location.Z);
+                                        }
+                                        catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                                    }
+                                }
+                                location = new XYZ(minXYZ.X, minXYZ.Y, location.Z + heightItem.heightOrHeight);
+                            }
+                        }
+                    }
                 }
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
