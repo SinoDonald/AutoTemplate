@@ -151,12 +151,16 @@ namespace AutoTemplate
                 intersectXYZs = intersectXYZs.Distinct().ToList();
                 foreach (XYZ intersectXYZ in intersectXYZs)
                 {
-                    //FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural); // 放置磁磚
-                    try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
+                    try 
+                    {
+                        double heightOrHeight = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                        FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                        tiles.LookupParameter("長").Set(heightOrHeight);
+                        tiles.LookupParameter("寬").Set(heightOrHeight);
+                        //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+                    } // 放置磁磚
+                    //try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
                     catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                    //tiles.LookupParameter("長").Set(lengthItem.heightOrHeight);
-                    //tiles.LookupParameter("寬").Set(heightItem.heightOrHeight);
-                    //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
                 }
 
                 //foreach (Wall wall in walls)
