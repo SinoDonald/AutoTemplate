@@ -5,6 +5,7 @@ using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Windows;
 
 namespace AutoTemplate
@@ -85,83 +86,79 @@ namespace AutoTemplate
                 Solid hostSolid = UnionSolids(solids, solids[0]); // 將所有Solid聯集
 
                 List<Curve> sideFaceCurves = new List<Curve>();
-                List<Curve> curveList = new List<Curve>();
-                Face maxFace = null;
                 if (null != hostSolid)
                 {
-                    List<Face> sideFaces = new List<Face>();
-                    foreach (Face face in hostSolid.Faces)
-                    {
-                        PlanarFace pf = face as PlanarFace;
-                        if (null != pf && pf.FaceNormal.IsAlmostEqualTo(-XYZ.BasisZ))
-                        {
-                            if(maxFace == null) { maxFace = face; }
-                            else { if (face.Area > maxFace.Area) { maxFace = face; } }
-                        }
-                        if (null != pf && !pf.FaceNormal.IsAlmostEqualTo(XYZ.BasisZ) && !pf.FaceNormal.IsAlmostEqualTo(-XYZ.BasisZ))
-                        {
-                            sideFaces.Add(face);
-                        }
-                    }
-                    foreach (EdgeArray edgeArray in maxFace.EdgeLoops)
-                    {
-                        foreach (Edge edge in edgeArray)
-                        {
-                            Curve curve = edge.AsCurveFollowingFace(maxFace);
-                            try { curveList.Add(curve); }
-                            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                        }
-                    }
-                    foreach(Face sideFace in sideFaces)
-                    {
-                        foreach (EdgeArray edgeArray in sideFace.EdgeLoops)
-                        {
-                            foreach (Edge edge in edgeArray)
-                            {
-                                Curve curve = edge.AsCurveFollowingFace(sideFace);
-                                try 
-                                {
-                                    Curve sameCurve = sideFaceCurves.Where(x => x.Tessellate()[0].X == curve.Tessellate()[0].X &&
-                                                                                x.Tessellate()[0].Y == curve.Tessellate()[0].Y && 
-                                                                                x.Tessellate()[0].Z == curve.Tessellate()[0].Z && 
-                                                                                x.Tessellate()[1].X == curve.Tessellate()[1].X &&
-                                                                                x.Tessellate()[1].Y == curve.Tessellate()[1].Y &&
-                                                                                x.Tessellate()[1].Z == curve.Tessellate()[1].Z).FirstOrDefault(); 
-                                    if (sameCurve == null) { sideFaceCurves.Add(curve); }
-                                }
-                                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                            }
-                        }
-                    }
-                }
-                foreach(Curve curve in curveList) { DrawLine(doc, curve); } // 3D視圖中畫模型線
+                    List<Face> sideFaces = GetFaces(new List<Solid> { hostSolid }, "side");
+                    Face maxFace = sideFaces.OrderByDescending(x => x.Area).FirstOrDefault();
+                    sideFaces = new List<Face> { maxFace };
+                    //foreach (Face sideFace in sideFaces)
+                    //{
+                    //    foreach (EdgeArray edgeArray in sideFace.EdgeLoops)
+                    //    {
+                    //        foreach (Edge edge in edgeArray)
+                    //        {
+                    //            Curve curve = edge.AsCurveFollowingFace(sideFace);
+                    //            try { sideFaceCurves.Add(curve); }
+                    //            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                    //        }
+                    //    }
+                    //}
 
-                // 計算轉角的邊
-                List<XYZ> intersectXYZs = new List<XYZ>();
-                for(int i = 0; i < curveList.Count - 1; i++)
-                {
-                    bool arePerpendicular = AreCurvesPerpendicular(curveList[i], curveList[i + 1]);
-                    if (arePerpendicular)
+                    foreach (Face face in sideFaces)
                     {
-                        XYZ startXYZ = curveList[i].Tessellate()[0];
-                        XYZ sameXYZ = intersectXYZs.Where(x => x.X == startXYZ.X && x.Y == startXYZ.Y && x.Z == startXYZ.Z).FirstOrDefault();
-                        if (sameXYZ == null) { intersectXYZs.Add(startXYZ); } 
+                        (List<XYZ>, List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                        List<XYZ> xyzs = pointToMatrix.Item1;
+                        List<PointToMatrix> pointToMatrixs = pointToMatrix.Item2;
+                        int rows = pointToMatrix.Item3;
+                        int cols = pointToMatrix.Item4;
+                        // 分割幾何圖形成n個矩形
+                        List<Rectangle> rectangles = new List<Rectangle>();
+                        SaveRectangle(uidoc, doc, rows, cols, pointToMatrixs, rectangles);
+                        //for (int i = 0; i < rows; i++)
+                        //{
+                        //    for (int j = 0; j < cols - 1; j++)
+                        //    {
+                        //        PointToMatrix start = pointToMatrixs.Where(x => x.rows.Equals(i) && x.cols.Equals(j)).FirstOrDefault();
+                        //        PointToMatrix end = pointToMatrixs.Where(x => x.rows.Equals(i) && x.cols.Equals(j + 1)).FirstOrDefault();
+                        //        if (start.isRectangle == 1 && end.isRectangle == 1) { DrawLine(doc, Line.CreateBound(start.xyz, end.xyz)); }
+                        //    }
+                        //}
                     }
                 }
-                intersectXYZs = intersectXYZs.Distinct().ToList();
-                foreach (XYZ intersectXYZ in intersectXYZs)
-                {
-                    try 
-                    {
-                        double heightOrHeight = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                        FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
-                        tiles.LookupParameter("長").Set(heightOrHeight);
-                        tiles.LookupParameter("寬").Set(heightOrHeight);
-                        //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
-                    } // 放置磁磚
-                    //try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
-                    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                }
+                //foreach (Curve curve in sideFaceCurves) { DrawLine(doc, curve); } // 3D視圖中畫模型線
+                //// 計算轉角的邊
+                //List<XYZ> intersectXYZs = new List<XYZ>();
+                //for (int i = 0; i < sideFaceCurves.Count - 1; i++)
+                //{
+                //    bool arePerpendicular = AreCurvesPerpendicular(sideFaceCurves[i], sideFaceCurves[i + 1]);
+                //    if (arePerpendicular)
+                //    {
+                //        XYZ startXYZ = sideFaceCurves[i].Tessellate()[0];
+                //        XYZ sameXYZ = intersectXYZs.Where(x => x.X == startXYZ.X && x.Y == startXYZ.Y && x.Z == startXYZ.Z).FirstOrDefault();
+                //        if (sameXYZ == null) { intersectXYZs.Add(startXYZ); }
+                //    }
+                //}
+                //intersectXYZs = intersectXYZs.Distinct().ToList();
+                //foreach (XYZ intersectXYZ in intersectXYZs)
+                //{
+                //    try
+                //    {
+                //        double heightOrHeight = RevitAPI.ConvertToInternalUnits(100, "millimeters");
+                //        FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                //        tiles.LookupParameter("長").Set(heightOrHeight);
+                //        tiles.LookupParameter("寬").Set(heightOrHeight);
+                //        //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
+                //    } // 放置磁磚
+                //    //try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
+                //    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                //}
+
+
+
+
+
+
+
 
                 //foreach (Wall wall in walls)
                 //{
@@ -309,38 +306,23 @@ namespace AutoTemplate
             return solids;
         }
         /// <summary>
-        /// 取得面
+        /// 取得幾何圖形的面
         /// </summary>
         /// <param name="solidList"></param>
-        /// <param name="where"></param>
         /// <returns></returns>
-        private List<Face> GetFaces(List<Solid> solidList, string where)
+        private List<Face> GetFaces(List<Solid> solidList, string direction)
         {
             List<Face> faces = new List<Face>();
             foreach (Solid solid in solidList)
             {
                 foreach (Face face in solid.Faces)
                 {
-                    if (where.Equals("top")) // 頂面
-                    {
-                        double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
-                        if (faceTZ > 0.0) { faces.Add(face); }
-                    }
-                    else if (where.Equals("bottom")) // 底面
-                    {
-                        //if (face.ComputeNormal(new UV(0.5, 0.5)).IsAlmostEqualTo(XYZ.BasisZ.Negate())) { topOrBottomFaces.Add(face); }
-                        double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
-                        if (faceTZ < 0.0) { faces.Add(face); }
-                    }
-                    else if (where.Equals("side")) // 側面
-                    {
-                        double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
-                        if (faceTZ != 1.0 && faceTZ != -1.0) { faces.Add(face); }
-                    }
-                    else
-                    {
-                        faces.Add(face);
-                    }
+                    //if (face.ComputeNormal(new UV(0.5, 0.5)).IsAlmostEqualTo(XYZ.BasisZ.Negate())) { faces.Add(face); }
+                    double faceTZ = face.ComputeNormal(new UV(0.5, 0.5)).Z;
+                    if (direction.Equals("top")) { if (faceTZ > 0.0) { faces.Add(face); } } // 頂面
+                    else if (direction.Equals("bottom")) { if (faceTZ < 0.0) { faces.Add(face); } } // 底面
+                    else if (direction.Equals("bevel")) { if (faceTZ < 0 && faceTZ != -1) { faces.Add(face); } } // 斜邊(突沿)
+                    else if (direction.Equals("side")) { if (faceTZ == 0.0) { faces.Add(face); } } // 側邊
                 }
             }
             return faces;
@@ -519,6 +501,9 @@ namespace AutoTemplate
             BoundingBoxUV bboxUV = face.GetBoundingBox();
             XYZ startXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
             XYZ endXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+            double minZ = startXYZ.Z;
+            double maxZ = endXYZ.Z;
+            if(minZ < maxZ) { startXYZ = new XYZ(startXYZ.X, startXYZ.Y, maxZ); endXYZ = new XYZ(endXYZ.X, endXYZ.Y, minZ); } // 確認座標是由左上到右下
             double offset = RevitAPI.ConvertToInternalUnits(100, "millimeters");
             double height = startXYZ.DistanceTo(new XYZ(startXYZ.X, startXYZ.Y, endXYZ.Z));
             int rows = (int)Math.Ceiling(height / offset);
@@ -529,7 +514,7 @@ namespace AutoTemplate
             XYZ newXYZ = startXYZ;
             for (int i = 0; i < rows; i++)
             {
-                if (i != 0) { newXYZ = new XYZ(startXYZ.X, startXYZ.Y, newXYZ.Z + offset); }
+                if (i != 0) { newXYZ = new XYZ(startXYZ.X, startXYZ.Y, newXYZ.Z - offset); }
                 for (int j = 0; j < cols; j++)
                 {
                     PointToMatrix pointToMatrix = new PointToMatrix();
@@ -582,7 +567,7 @@ namespace AutoTemplate
 
             return result;
         }
-        private void SaveRectangle(Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs, List<Rectangle> rectangles)
+        private void SaveRectangle(UIDocument uidoc, Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs, List<Rectangle> rectangles)
         {
             // 假設 1 表示矩形的一部分，0 表示空白
             int[,] grid = new int[rows, cols];
@@ -597,9 +582,9 @@ namespace AutoTemplate
             }
             Rectangle rectangle = MaximalRectangle(grid);
             rectangles.Add(rectangle);
-            for(int i = rectangle.TopLeft.Row; i < rectangle.BottomRight.Row; i++)
+            for(int i = rectangle.TopLeft.Row; i <= rectangle.BottomRight.Row; i++)
             {
-                for(int j = rectangle.TopLeft.Col;  j < rectangle.BottomRight.Col; j++)
+                for(int j = rectangle.TopLeft.Col; j <= rectangle.BottomRight.Col; j++)
                 {
                     PointToMatrix pointToMatrix = pointToMatrixs.Where(x => x.rows == i && x.cols == j).FirstOrDefault();
                     pointToMatrix.isRectangle = 0;
@@ -609,14 +594,21 @@ namespace AutoTemplate
             XYZ startPoint = pointToMatrixs.Where(x => x.rows == rectangle.TopLeft.Row && x.cols == rectangle.TopLeft.Col).Select(x => x.xyz).FirstOrDefault();
             XYZ endPoint = pointToMatrixs.Where(x => x.rows == rectangle.BottomRight.Row && x.cols == rectangle.BottomRight.Col).Select(x => x.xyz).FirstOrDefault();
             List<Curve> curves = new List<Curve>();
-            curves.Add(Line.CreateBound(startPoint, new XYZ(endPoint.X, endPoint.Y, startPoint.Z)));
-            curves.Add(Line.CreateBound(new XYZ(endPoint.X, endPoint.Y, startPoint.Z), endPoint));
-            curves.Add(Line.CreateBound(endPoint, new XYZ(startPoint.X, startPoint.Y, endPoint.Z)));
-            curves.Add(Line.CreateBound(new XYZ(startPoint.X, startPoint.Y, endPoint.Z), startPoint));
+            try
+            {
+                curves.Add(Line.CreateBound(startPoint, new XYZ(endPoint.X, endPoint.Y, startPoint.Z)));
+                curves.Add(Line.CreateBound(new XYZ(endPoint.X, endPoint.Y, startPoint.Z), endPoint));
+                curves.Add(Line.CreateBound(endPoint, new XYZ(startPoint.X, startPoint.Y, endPoint.Z)));
+                curves.Add(Line.CreateBound(new XYZ(startPoint.X, startPoint.Y, endPoint.Z), startPoint));
+            }
+            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             foreach (Curve curve in curves) { DrawLine(doc, curve); }
 
+            //doc.Regenerate();
+            //uidoc.RefreshActiveView();
+
             int isRectangle = pointToMatrixs.Where(x => x.isRectangle == 1).ToList().Count;
-            if(isRectangle > 0) { SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles); }
+            if(isRectangle > 0) { SaveRectangle(uidoc, doc, rows, cols, pointToMatrixs, rectangles); }
         }
         /// <summary>
         /// 計算最大矩形面積並返回位置
