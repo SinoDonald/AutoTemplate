@@ -82,38 +82,27 @@ namespace AutoTemplate
                 List<Element> elems = ColumnsAndWallsElems(doc); // 查詢所有柱牆的Element                
                 List<IntersectionElem> list = IntersectGroup(doc, elems); // ElementId第一個有接觸到的所有元件
                 List<Solid> solids = new List<Solid>(); // 儲存所有柱牆的Solid                
-                foreach (Element elem in elems) { foreach(Solid solid in GetSolids(doc, elem)) { solids.Add(solid); } }                
+                foreach (Element elem in elems) { foreach (Solid solid in GetSolids(doc, elem)) { solids.Add(solid); } }
                 Solid hostSolid = UnionSolids(solids, solids[0]); // 將所有Solid聯集
 
-                List<Curve> sideFaceCurves = new List<Curve>();
                 if (null != hostSolid)
                 {
                     List<Face> sideFaces = GetFaces(new List<Solid> { hostSolid }, "side");
                     Face maxFace = sideFaces.OrderByDescending(x => x.Area).FirstOrDefault();
                     sideFaces = new List<Face> { maxFace };
-                    //foreach (Face sideFace in sideFaces)
-                    //{
-                    //    foreach (EdgeArray edgeArray in sideFace.EdgeLoops)
-                    //    {
-                    //        foreach (Edge edge in edgeArray)
-                    //        {
-                    //            Curve curve = edge.AsCurveFollowingFace(sideFace);
-                    //            try { sideFaceCurves.Add(curve); }
-                    //            catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                    //        }
-                    //    }
-                    //}
-
                     foreach (Face face in sideFaces)
                     {
-                        (List<XYZ>, List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
-                        List<XYZ> xyzs = pointToMatrix.Item1;
-                        List<PointToMatrix> pointToMatrixs = pointToMatrix.Item2;
-                        int rows = pointToMatrix.Item3;
-                        int cols = pointToMatrix.Item4;
-                        // 分割幾何圖形成n個矩形
-                        List<Rectangle> rectangles = new List<Rectangle>();
-                        SaveRectangle(uidoc, doc, rows, cols, pointToMatrixs, rectangles);
+                        (List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                        List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
+                        int rows = pointToMatrix.Item2;
+                        int cols = pointToMatrix.Item3;
+
+                        Form1 form1 = new Form1(pointToMatrixs, cols, rows);
+                        form1.ShowDialog();
+
+                        //// 分割幾何圖形成n個矩形
+                        //List<Rectangle> rectangles = new List<Rectangle>();
+                        //SaveRectangle(uidoc, doc, rows, cols, pointToMatrixs, rectangles);
                         //for (int i = 0; i < rows; i++)
                         //{
                         //    for (int j = 0; j < cols - 1; j++)
@@ -125,59 +114,8 @@ namespace AutoTemplate
                         //}
                     }
                 }
-                //foreach (Curve curve in sideFaceCurves) { DrawLine(doc, curve); } // 3D視圖中畫模型線
-                //// 計算轉角的邊
-                //List<XYZ> intersectXYZs = new List<XYZ>();
-                //for (int i = 0; i < sideFaceCurves.Count - 1; i++)
-                //{
-                //    bool arePerpendicular = AreCurvesPerpendicular(sideFaceCurves[i], sideFaceCurves[i + 1]);
-                //    if (arePerpendicular)
-                //    {
-                //        XYZ startXYZ = sideFaceCurves[i].Tessellate()[0];
-                //        XYZ sameXYZ = intersectXYZs.Where(x => x.X == startXYZ.X && x.Y == startXYZ.Y && x.Z == startXYZ.Z).FirstOrDefault();
-                //        if (sameXYZ == null) { intersectXYZs.Add(startXYZ); }
-                //    }
-                //}
-                //intersectXYZs = intersectXYZs.Distinct().ToList();
-                //foreach (XYZ intersectXYZ in intersectXYZs)
-                //{
-                //    try
-                //    {
-                //        double heightOrHeight = RevitAPI.ConvertToInternalUnits(100, "millimeters");
-                //        FamilyInstance tiles = doc.Create.NewFamilyInstance(intersectXYZ, fs, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
-                //        tiles.LookupParameter("長").Set(heightOrHeight);
-                //        tiles.LookupParameter("寬").Set(heightOrHeight);
-                //        //tiles.get_Parameter(BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM).Set(elemId);
-                //    } // 放置磁磚
-                //    //try { FamilyInstance tiles = doc.Create.NewFamilyInstance(maxFace, intersectXYZ, XYZ.BasisZ, fs); } // 放置磁磚
-                //    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                //}
 
-
-
-
-
-
-
-
-                //foreach (Wall wall in walls)
-                //{
-                //    List<Solid> wallSolids = GetSolids(doc, wall);
-                //    List<Face> wallFaces = GetFaces(wallSolids, "side");
-                //    Level level = doc.GetElement(wall.LevelId) as Level;
-                //    try
-                //    {
-                //        if (level != null)
-                //        {
-                //            // 在這個位置創建長方形
-                //            IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
-                //            CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
-                //            //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
-                //            //CalculateGeom(uidoc, doc, interiorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
-                //        }
-                //    }
-                //    catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
-                //}
+                //PutExterInteriorTiles(uidoc, doc, walls, fs); // 放置內外牆的磁磚
 
                 trans.Commit();
                 DateTime timeEnd = DateTime.Now; // 計時結束 取得目前時間
@@ -187,7 +125,11 @@ namespace AutoTemplate
 
             return Result.Succeeded;
         }
-        // 查詢所有柱牆的Element
+        /// <summary>
+        /// 查詢所有柱牆的Element
+        /// </summary>
+        /// <param name="doc"></param>
+        /// <returns></returns>
         private List<Element> ColumnsAndWallsElems(Document doc)
         {
             List<Element> elems = new List<Element>();
@@ -199,7 +141,12 @@ namespace AutoTemplate
 
             return elems;
         }
-        //  ElementId第一個有接觸到的所有元件
+        /// <summary>
+        /// ElementId第一個有接觸到的所有元件
+        /// </summary>
+        /// <param name="doc"></param>
+        /// <param name="elems"></param>
+        /// <returns></returns>
         private List<IntersectionElem> IntersectGroup(Document doc, List<Element> elems)
         {
             List<IntersectionElem> list = new List<IntersectionElem>();
@@ -225,7 +172,12 @@ namespace AutoTemplate
 
             return list;
         }
-        // 將所有Solid聯集
+        /// <summary>
+        /// 將所有Solid聯集
+        /// </summary>
+        /// <param name="solids"></param>
+        /// <param name="hostSolid"></param>
+        /// <returns></returns>
         private Solid UnionSolids(IList<Solid> solids, Solid hostSolid)
         {
             Solid unionSolid = null;
@@ -383,6 +335,34 @@ namespace AutoTemplate
             return null;
         }
         /// <summary>
+        /// 放置內外牆的磁磚
+        /// </summary>
+        /// <param name="uidoc"></param>
+        /// <param name="doc"></param>
+        /// <param name="walls"></param>
+        /// <param name="fs"></param>
+        private void PutExterInteriorTiles(UIDocument uidoc, Document doc, List<Wall> walls, FamilySymbol fs)
+        {
+            foreach (Wall wall in walls)
+            {
+                List<Solid> wallSolids = GetSolids(doc, wall);
+                List<Face> wallFaces = GetFaces(wallSolids, "side");
+                Level level = doc.GetElement(wall.LevelId) as Level;
+                try
+                {
+                    if (level != null)
+                    {
+                        // 在這個位置創建長方形
+                        IList<Reference> exteriorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior); // 外牆
+                        CalculateGeom(uidoc, doc, exteriorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
+                        //IList<Reference> interiorFaces = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior); // 內牆
+                        //CalculateGeom(uidoc, doc, interiorFaces, fs, wall.LevelId); // 計算放置各尺寸的數量
+                    }
+                }
+                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+            }
+        }
+        /// <summary>
         /// 計算放置各尺寸的數量
         /// </summary>
         /// <param name="uidoc"></param>
@@ -397,17 +377,14 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-                    (List<XYZ>, List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
-                    List<XYZ> xyzs = pointToMatrix.Item1;
-                    List<PointToMatrix> pointToMatrixs = pointToMatrix.Item2;
-                    int rows = pointToMatrix.Item3;
-                    int cols = pointToMatrix.Item4;
-
+                    (List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                    List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
+                    int rows = pointToMatrix.Item2;
+                    int cols = pointToMatrix.Item3;
 
                     // 分割幾何圖形成n個矩形
                     //List<Rectangle> rectangles = new List<Rectangle>();
                     //SaveRectangle(doc, rows, cols, pointToMatrixs, rectangles);
-
 
                     // 放置磁磚
                     List<Line> rowLines = new List<Line>(); // 橫向的線
@@ -478,10 +455,9 @@ namespace AutoTemplate
         /// </summary>
         /// <param name="face"></param>
         /// <returns></returns>
-        public (List<XYZ>, List<PointToMatrix>, int, int) GenerateUniformPoints(Face face)
+        public (List<PointToMatrix>, int, int) GenerateUniformPoints(Face face)
         {
             List<PointToMatrix> pointToMatrixs = new List<PointToMatrix>();
-            List<XYZ> xyzs = new List<XYZ>();
 
             List<CurveLoop> curveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList();
             curveLoops.RemoveAt(0); // 移除最大的邊界
@@ -528,16 +504,12 @@ namespace AutoTemplate
                         isInside = IsInsideOutline(newXYZ, lines); // 檢查座標點是否在開口內
                         if (isInside) { pointToMatrix.isRectangle = 0; break; } // 在開口內的話則退出, 不儲存座標點
                     }
-                    //if (!isInside) 
-                    //{ 
-                        xyzs.Add(newXYZ); 
-                    //}
                     pointToMatrixs.Add(pointToMatrix);
                     newXYZ = new XYZ(newXYZ.X + vector.X, newXYZ.Y + vector.Y, newXYZ.Z);
                 }
             }
 
-            return (xyzs, pointToMatrixs, rows, cols);
+            return (pointToMatrixs, rows, cols);
         }
         /// <summary>
         /// 檢查座標點是否在開口內
@@ -550,20 +522,15 @@ namespace AutoTemplate
             bool result = true;
             int insertCount = 0;
             Line rayLine = Line.CreateBound(xyz, xyz.Add(XYZ.BasisX * 1000));
-            foreach (var arealine in lines)
+            foreach (Line line in lines)
             {
-                SetComparisonResult interResult = arealine.Intersect(rayLine, out IntersectionResultArray resultArray);
+                if(line.Distance(xyz) < 0.0001) { break; }
+                SetComparisonResult interResult = line.Intersect(rayLine, out IntersectionResultArray resultArray);
                 IntersectionResult insPoint = resultArray?.get_Item(0);
-                if (insPoint != null)
-                {
-                    insertCount++;
-                }
+                if (insPoint != null) { insertCount++; }
             }
             // 如果次數為偶數就在外面, 奇數就在裡面
-            if(insertCount % 2 == 0)
-            {
-                return result = false;
-            }
+            if(insertCount % 2 == 0) { return result = false; }
 
             return result;
         }
