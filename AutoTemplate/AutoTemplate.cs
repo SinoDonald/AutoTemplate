@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Media.TextFormatting;
+using static AutoTemplate.AutoTemplate;
+using static System.Windows.Forms.LinkLabel;
 
 namespace AutoTemplate
 {
@@ -92,13 +95,117 @@ namespace AutoTemplate
                     sideFaces = new List<Face> { maxFace };
                     foreach (Face face in sideFaces)
                     {
-                        (List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                        (List<PointToMatrix>, List<List<Line>>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
                         List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
-                        int rows = pointToMatrix.Item2;
-                        int cols = pointToMatrix.Item3;
+                        List<List<Line>> linesList = pointToMatrix.Item2; // 開口的封閉曲線
+                        int rows = pointToMatrix.Item3;
+                        int cols = pointToMatrix.Item4;
 
-                        Form1 form1 = new Form1(pointToMatrixs, cols, rows);
-                        form1.ShowDialog();
+                        (List<Line>, List<Line>, List<Line>) leftRightLines = LeftRightLines(face, linesList);
+                        List<Line> leftLines = leftRightLines.Item1; // 左邊的線段
+                        List<Line> rightLines = leftRightLines.Item2; // 右邊的線段
+                        List<Line> allLines = leftRightLines.Item3; // 全部的線段
+                        //foreach (Line line in allLines) { DrawLine(doc, line); doc.Regenerate(); uidoc.RefreshActiveView(); }
+
+
+                        CurveLoop maxCurveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList().FirstOrDefault(); // Face最大的範圍邊界
+                        List<Line> maxCurveList = new List<Line>();
+                        foreach (Curve maxCurve in maxCurveLoops) { maxCurveList.Add(Line.CreateBound(maxCurve.Tessellate()[0], maxCurve.Tessellate()[maxCurve.Tessellate().Count - 1])); }
+                        maxCurveList = maxCurveList.Where(x => x.Direction.Z > 0 || x.Direction.Z < 0).ToList();
+                        if (maxCurveList.Count > 1)
+                        {
+                            BoundingBoxUV bboxUV = face.GetBoundingBox();
+                            Line minXYZLine = maxCurveList.OrderBy(x => VectorDistance(x.Origin, face.Evaluate(bboxUV.Min))).FirstOrDefault();
+                            Line line = allLines[0];
+                            XYZ point1 = minXYZLine.Project(line.GetEndPoint(0)).XYZPoint;
+                            XYZ point2 = minXYZLine.Project(line.GetEndPoint(1)).XYZPoint;
+
+                            // 左邊框
+                            List<Curve> curves = new List<Curve>();
+                            curves.Add(Line.CreateBound(point1, point2));
+                            curves.Add(Line.CreateBound(point2, line.GetEndPoint(1)));
+                            curves.Add(line);
+                            curves.Add(Line.CreateBound(line.GetEndPoint(0), point1));
+                            foreach (Line curve in curves) { DrawLine(doc, curve); }
+                            allLines.Remove(line);
+
+                            // 右邊框
+                            Line maxXYZLine = maxCurveList.OrderByDescending(x => VectorDistance(x.Origin, face.Evaluate(bboxUV.Min))).FirstOrDefault();
+                            line = allLines[allLines.Count - 1];
+                            point1 = maxXYZLine.Project(line.GetEndPoint(0)).XYZPoint;
+                            point2 = maxXYZLine.Project(line.GetEndPoint(1)).XYZPoint;
+                            curves = new List<Curve>();
+                            curves.Add(Line.CreateBound(point1, point2));
+                            curves.Add(Line.CreateBound(point2, line.GetEndPoint(1)));
+                            curves.Add(line);
+                            curves.Add(Line.CreateBound(line.GetEndPoint(0), point1));
+                            foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                            allLines.Remove(line);
+
+                            // 中間框
+                            for (int i = 0; i < allLines.Count - 1; i+=2) 
+                            {
+                                try
+                                {
+                                    Line line1 = allLines[i];
+                                    Line line2 = allLines[i + 1];
+                                    if(line1.Length < line2.Length) { line1 = allLines[i + 1]; line2 = allLines[i]; }
+                                    point1 = line1.Project(line2.GetEndPoint(0)).XYZPoint;
+                                    point2 = line1.Project(line2.GetEndPoint(1)).XYZPoint;
+                                    curves = new List<Curve>();
+                                    curves.Add(Line.CreateBound(point1, point2));
+                                    curves.Add(Line.CreateBound(point2, line2.GetEndPoint(1)));
+                                    curves.Add(line2);
+                                    curves.Add(Line.CreateBound(line2.GetEndPoint(0), point1));
+                                    foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                                }
+                                catch(Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                            }
+                        }
+
+                        //if (leftLines.Count > 1)
+                        //{
+                        //    List<Curve> curves = new List<Curve>();
+                        //    Line line = leftLines[0];
+                        //    XYZ point1 = line.Project(leftLines[1].GetEndPoint(0)).XYZPoint;
+                        //    XYZ point2 = line.Project(leftLines[1].GetEndPoint(1)).XYZPoint;
+                        //    curves.Add(Line.CreateBound(point1, point2));
+                        //    curves.Add(Line.CreateBound(point2, leftLines[1].GetEndPoint(1)));
+                        //    curves.Add(leftLines[1]);
+                        //    curves.Add(Line.CreateBound(leftLines[1].GetEndPoint(0), point1));
+                        //    foreach(Curve curve in curves) { DrawLine(doc, curve); }
+
+                        //    //leftLines.Remove(leftLines[0]); leftLines.Remove(leftLines[1]);
+                        //}
+                        //if (rightLines.Count > 1)
+                        //{
+                        //    List<Curve> curves = new List<Curve>();
+                        //    Line line = rightLines.Last();
+                        //    XYZ point1 = line.Project(rightLines[rightLines.Count - 2].GetEndPoint(0)).XYZPoint;
+                        //    XYZ point2 = line.Project(rightLines[rightLines.Count - 2].GetEndPoint(1)).XYZPoint;
+                        //    curves.Add(Line.CreateBound(point1, point2));
+                        //    curves.Add(Line.CreateBound(point2, rightLines[rightLines.Count - 2].GetEndPoint(1)));
+                        //    curves.Add(rightLines[rightLines.Count - 2]);
+                        //    curves.Add(Line.CreateBound(rightLines[rightLines.Count - 2].GetEndPoint(0), point1));
+                        //    foreach (Curve curve in curves) { DrawLine(doc, curve); }
+
+                        //    //rightLines.Remove(rightLines[rightLines.Count - 2]); rightLines.Remove(rightLines.Last());
+                        //}
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        //Form1 form1 = new Form1(pointToMatrixs, cols, rows);
+                        //form1.ShowDialog();
 
                         //// 分割幾何圖形成n個矩形
                         //List<Rectangle> rectangles = new List<Rectangle>();
@@ -377,10 +484,11 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-                    (List<PointToMatrix>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                    (List<PointToMatrix>, List<List<Line>>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
                     List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
-                    int rows = pointToMatrix.Item2;
-                    int cols = pointToMatrix.Item3;
+                    List<List<Line>> linesList = pointToMatrix.Item2; // 開口的封閉曲線
+                    int rows = pointToMatrix.Item3;
+                    int cols = pointToMatrix.Item4;
 
                     // 分割幾何圖形成n個矩形
                     //List<Rectangle> rectangles = new List<Rectangle>();
@@ -455,7 +563,7 @@ namespace AutoTemplate
         /// </summary>
         /// <param name="face"></param>
         /// <returns></returns>
-        public (List<PointToMatrix>, int, int) GenerateUniformPoints(Face face)
+        private (List<PointToMatrix>, List<List<Line>>, int, int) GenerateUniformPoints(Face face)
         {
             List<PointToMatrix> pointToMatrixs = new List<PointToMatrix>();
 
@@ -501,7 +609,7 @@ namespace AutoTemplate
                     bool isInside = true;
                     foreach(List<Line> lines in linesList)
                     {
-                        isInside = IsInsideOutline(newXYZ, lines); // 檢查座標點是否在開口內
+                        isInside = IsInsideOutline(newXYZ, vector, lines); // 檢查座標點是否在開口內
                         if (isInside) { pointToMatrix.isRectangle = 0; break; } // 在開口內的話則退出, 不儲存座標點
                     }
                     pointToMatrixs.Add(pointToMatrix);
@@ -509,7 +617,7 @@ namespace AutoTemplate
                 }
             }
 
-            return (pointToMatrixs, rows, cols);
+            return (pointToMatrixs, linesList, rows, cols);
         }
         /// <summary>
         /// 檢查座標點是否在開口內
@@ -517,22 +625,91 @@ namespace AutoTemplate
         /// <param name="xyz"></param>
         /// <param name="lines"></param>
         /// <returns></returns>
-        public bool IsInsideOutline(XYZ xyz, List<Line> lines)
+        private bool IsInsideOutline(XYZ xyz, Vector vector, List<Line> lines)
         {
             bool result = true;
             int insertCount = 0;
-            Line rayLine = Line.CreateBound(xyz, xyz.Add(XYZ.BasisX * 1000));
-            foreach (Line line in lines)
+            vector = GetVectorOffset(vector, 1000); // 偏移長度
+            XYZ rayXYZ = new XYZ(xyz.X + vector.X, xyz.Y + vector.Y, xyz.Z);
+            Line rayLine = Line.CreateBound(xyz, rayXYZ);
+            List<Line> overlap = lines.Where(x => x.Distance(xyz) < 0.0001).ToList();
+            if (overlap.Count == 0) 
             {
-                if(line.Distance(xyz) < 0.0001) { break; }
-                SetComparisonResult interResult = line.Intersect(rayLine, out IntersectionResultArray resultArray);
-                IntersectionResult insPoint = resultArray?.get_Item(0);
-                if (insPoint != null) { insertCount++; }
+                foreach (Line line in lines)
+                {
+                    //if (line.Distance(xyz) < 0.0001) { break; }
+                    SetComparisonResult interResult = line.Intersect(rayLine, out IntersectionResultArray resultArray);
+                    IntersectionResult insPoint = resultArray?.get_Item(0);
+                    if (insPoint != null) { insertCount++; }
+                }
+                // 如果次數為偶數就在外面, 奇數就在裡面
+                if (insertCount % 2 == 0) { return result = false; }
             }
-            // 如果次數為偶數就在外面, 奇數就在裡面
-            if(insertCount % 2 == 0) { return result = false; }
+            else { return result = false; }
+            
 
             return result;
+        }
+        /// <summary>
+        /// 辨識在左右邊的線段
+        /// </summary>
+        /// <param name="face"></param>
+        /// <param name="linesList"></param>
+        /// <returns></returns>
+        private (List<Line>, List<Line>, List<Line>) LeftRightLines(Face face, List<List<Line>> linesList)
+        {
+            List<Line> allLines = new List<Line>();
+            List<Line> leftLines = new List<Line>();
+            List<Line> rightLines = new List<Line>();
+            CurveLoop maxCurveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList().FirstOrDefault(); // Face最大的範圍邊界
+            List<Line> maxCurveList = new List<Line>();
+            foreach (Curve maxCurve in maxCurveLoops) { maxCurveList.Add(Line.CreateBound(maxCurve.Tessellate()[0], maxCurve.Tessellate()[maxCurve.Tessellate().Count - 1])); }
+
+            // 針對邊界進行排列
+            //linesList.Add(maxCurveList);
+            foreach (List<Line> lines in linesList)
+            {
+                // 先找到上下的邊
+                List<Line> orderByLines = lines.Where(x => x.Direction.Z > 0 || x.Direction.Z < 0).ToList();
+                // 辨識線段在左右邊
+                if (orderByLines.Count > 1)
+                {
+                    XYZ xyz1 = orderByLines[0].Origin;
+                    XYZ xyz2 = orderByLines[orderByLines.Count - 1].Origin;
+                    Vector vector1 = new Vector(xyz2.X - xyz1.X, xyz2.Y - xyz1.Y);
+                    if (vector1.X > 0)
+                    {
+                        leftLines.Add(orderByLines[0]);
+                        rightLines.Add(orderByLines[orderByLines.Count - 1]);
+                    }
+                    else if (vector1.X < 0)
+                    {
+                        leftLines.Add(orderByLines[orderByLines.Count - 1]);
+                        rightLines.Add(orderByLines[0]);
+                    }
+                    else
+                    {
+                        if (vector1.Y > 0)
+                        {
+                            leftLines.Add(orderByLines[0]);
+                            rightLines.Add(orderByLines[orderByLines.Count - 1]);
+                        }
+                        else if (vector1.Y < 0)
+                        {
+                            leftLines.Add(orderByLines[orderByLines.Count - 1]);
+                            rightLines.Add(orderByLines[0]);
+                        }
+                    }
+                    allLines.Add(orderByLines[0]);
+                    allLines.Add(orderByLines[orderByLines.Count - 1]);
+                }
+            }
+            BoundingBoxUV bboxUV = face.GetBoundingBox();
+            leftLines = leftLines.OrderBy(x => VectorDistance(x.Origin, face.Evaluate(bboxUV.Min))).ToList();
+            rightLines = rightLines.OrderBy(x => VectorDistance(x.Origin, face.Evaluate(bboxUV.Min))).ToList();
+            allLines = allLines.OrderBy(x => VectorDistance(x.Origin, face.Evaluate(bboxUV.Min))).ToList();
+
+            return (leftLines, rightLines, allLines);
         }
         private void SaveRectangle(UIDocument uidoc, Document doc, int rows, int cols, List<PointToMatrix> pointToMatrixs, List<Rectangle> rectangles)
         {
@@ -651,7 +828,17 @@ namespace AutoTemplate
 
             return (maxArea, startCol, endCol, height);
         }
-
+        /// <summary>
+        /// 計算與Face原點的距離後排序
+        /// </summary>
+        /// <param name="xyz1"></param>
+        /// <param name="minXYZ"></param>
+        /// <returns></returns>
+        private double VectorDistance(XYZ xyz1, XYZ minXYZ)
+        {
+            Vector vector = new Vector(minXYZ.X - xyz1.X, minXYZ.Y - xyz1.Y);
+            return vector.Length;
+        }
 
 
 
