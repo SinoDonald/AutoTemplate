@@ -95,18 +95,19 @@ namespace AutoTemplate
                     sideFaces = new List<Face> { maxFace };
                     foreach (Face face in sideFaces)
                     {
-                        (List<PointToMatrix>, List<List<Line>>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                        (List<PointToMatrix>, List<List<Line>>, int, int, List<Curve>) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
                         List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
                         List<List<Line>> linesList = pointToMatrix.Item2; // 開口的封閉曲線
                         int rows = pointToMatrix.Item3;
                         int cols = pointToMatrix.Item4;
+                        List<Curve> testCurves = pointToMatrix.Item5;
+                        foreach (Line curve in testCurves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
 
                         (List<Line>, List<Line>, List<Line>) leftRightLines = LeftRightLines(face, linesList);
                         List<Line> leftLines = leftRightLines.Item1; // 左邊的線段
                         List<Line> rightLines = leftRightLines.Item2; // 右邊的線段
                         List<Line> allLines = leftRightLines.Item3; // 全部的線段
                         //foreach (Line line in allLines) { DrawLine(doc, line); doc.Regenerate(); uidoc.RefreshActiveView(); }
-
 
                         CurveLoop maxCurveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList().FirstOrDefault(); // Face最大的範圍邊界
                         List<Line> maxCurveList = new List<Line>();
@@ -126,7 +127,7 @@ namespace AutoTemplate
                             curves.Add(Line.CreateBound(point2, line.GetEndPoint(1)));
                             curves.Add(line);
                             curves.Add(Line.CreateBound(line.GetEndPoint(0), point1));
-                            foreach (Line curve in curves) { DrawLine(doc, curve); }
+                            //foreach (Line curve in curves) { DrawLine(doc, curve); }
                             allLines.Remove(line);
 
                             // 右邊框
@@ -139,7 +140,7 @@ namespace AutoTemplate
                             curves.Add(Line.CreateBound(point2, line.GetEndPoint(1)));
                             curves.Add(line);
                             curves.Add(Line.CreateBound(line.GetEndPoint(0), point1));
-                            foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                            //foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
                             allLines.Remove(line);
 
                             // 中間框
@@ -157,7 +158,7 @@ namespace AutoTemplate
                                     curves.Add(Line.CreateBound(point2, line2.GetEndPoint(1)));
                                     curves.Add(line2);
                                     curves.Add(Line.CreateBound(line2.GetEndPoint(0), point1));
-                                    foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                                    //foreach (Line curve in curves) { DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView(); }
                                 }
                                 catch(Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
                             }
@@ -484,11 +485,12 @@ namespace AutoTemplate
                 try
                 {
                     Face face = uidoc.Document.GetElement(referenceFace).GetGeometryObjectFromReference(referenceFace) as Face;
-                    (List<PointToMatrix>, List<List<Line>>, int, int) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
+                    (List<PointToMatrix>, List<List<Line>>, int, int, List<Curve>) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
                     List<PointToMatrix> pointToMatrixs = pointToMatrix.Item1;
                     List<List<Line>> linesList = pointToMatrix.Item2; // 開口的封閉曲線
                     int rows = pointToMatrix.Item3;
                     int cols = pointToMatrix.Item4;
+                    List<Curve> testCurves = pointToMatrix.Item5;
 
                     // 分割幾何圖形成n個矩形
                     //List<Rectangle> rectangles = new List<Rectangle>();
@@ -563,8 +565,9 @@ namespace AutoTemplate
         /// </summary>
         /// <param name="face"></param>
         /// <returns></returns>
-        private (List<PointToMatrix>, List<List<Line>>, int, int) GenerateUniformPoints(Face face)
+        private (List<PointToMatrix>, List<List<Line>>, int, int, List<Curve>) GenerateUniformPoints(Face face)
         {
+            List<Curve> testCurves = new List<Curve>();
             List<PointToMatrix> pointToMatrixs = new List<PointToMatrix>();
 
             List<CurveLoop> curveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList();
@@ -596,6 +599,48 @@ namespace AutoTemplate
             Vector vector = new Vector(endXYZ.X - startXYZ.X, endXYZ.Y - startXYZ.Y); // 方向向量
             vector = GetVectorOffset(vector, offset);
             XYZ newXYZ = startXYZ;
+
+            // 計算最外圍邊界有的開口處
+            List<Curve> curves = new List<Curve>();
+            XYZ point1 = startXYZ;
+            XYZ point2 = new XYZ(endXYZ.X, endXYZ.Y, startXYZ.Z);
+            XYZ point3 = endXYZ;
+            XYZ point4 = new XYZ(startXYZ.X, startXYZ.Y, endXYZ.Z);
+            curves.Add(Line.CreateBound(point1, point2));
+            curves.Add(Line.CreateBound(point2, point3));
+            curves.Add(Line.CreateBound(point3, point4));
+            curves.Add(Line.CreateBound(point4, point1));
+            CurveLoop cl1 = CurveLoop.Create(curves);
+            PlanarFace pf = face as PlanarFace;
+            Solid solid1 = GeometryCreationUtilities.CreateExtrusionGeometry(new List<CurveLoop> { cl1 }, XYZ.BasisY, 1);
+            CurveLoop testCL = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).FirstOrDefault();
+            Solid solid2 = GeometryCreationUtilities.CreateExtrusionGeometry(new List<CurveLoop>(){ testCL }, XYZ.BasisY, 1);
+            Solid differenceSolid = BooleanOperationsUtils.ExecuteBooleanOperation(solid1, solid2, BooleanOperationsType.Difference);
+            // 分析結果
+            if (differenceSolid != null)
+            {
+                List<Face> differenceSolidFaces = new List<Face>();
+                foreach (Face differenceSolidFace in GetFaces(new List<Solid> { differenceSolid }, "side")) 
+                {
+                    PlanarFace planceFace =  differenceSolidFace as PlanarFace ;
+                    if (planceFace.FaceNormal.X == -XYZ.BasisY.X && planceFace.FaceNormal.Y == -XYZ.BasisY.Y && planceFace.FaceNormal.Y == -XYZ.BasisY.Y)
+                    {
+                        differenceSolidFaces.Add(differenceSolidFace);
+                    }
+                }
+                List<Face> abcs = differenceSolidFaces.OrderByDescending(x => x.Area).ToList();
+                foreach(Face maxDifferenceFace in abcs)
+                {
+                    foreach (CurveLoop maxFaceCurveLoop in maxDifferenceFace.GetEdgesAsCurveLoops())
+                    {
+                        foreach (Curve maxFaceCurve in maxFaceCurveLoop)
+                        {
+                            testCurves.Add(maxFaceCurve);
+                        }
+                    }
+                }
+            }
+
             for (int i = 0; i < rows; i++)
             {
                 if (i != 0) { newXYZ = new XYZ(startXYZ.X, startXYZ.Y, newXYZ.Z - offset); }
@@ -605,19 +650,26 @@ namespace AutoTemplate
                     pointToMatrix.rows = i;
                     pointToMatrix.cols = j;
                     pointToMatrix.xyz = newXYZ;
-                    pointToMatrix.isRectangle = 1;
-                    bool isInside = true;
-                    foreach(List<Line> lines in linesList)
-                    {
-                        isInside = IsInsideOutline(newXYZ, vector, lines); // 檢查座標點是否在開口內
-                        if (isInside) { pointToMatrix.isRectangle = 0; break; } // 在開口內的話則退出, 不儲存座標點
-                    }
+                    IntersectionResult result = face.Project(newXYZ);
+                    if (result != null) { pointToMatrix.isRectangle = 1; }
+                    else { pointToMatrix.isRectangle = 0; }
+                    //bool isInside = true;
+                    //foreach(List<Line> lines in linesList)
+                    //{
+                    //    isInside = IsInsideOutline(newXYZ, vector, lines); // 檢查座標點是否在開口內
+                    //    if (isInside) { pointToMatrix.isRectangle = 0; break; } // 在開口內的話則退出, 不儲存座標點
+                    //}
                     pointToMatrixs.Add(pointToMatrix);
                     newXYZ = new XYZ(newXYZ.X + vector.X, newXYZ.Y + vector.Y, newXYZ.Z);
                 }
             }
 
-            return (pointToMatrixs, linesList, rows, cols);
+            return (pointToMatrixs, linesList, rows, cols, testCurves);
+        }
+        private XYZ PlaneOrigin(Face face)
+        {
+            PlanarFace planarFace = face as PlanarFace;
+            return planarFace.FaceNormal;
         }
         /// <summary>
         /// 檢查座標點是否在開口內
