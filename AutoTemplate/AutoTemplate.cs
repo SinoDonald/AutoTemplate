@@ -92,7 +92,7 @@ namespace AutoTemplate
                 {
                     List<Face> sideFaces = GetFaces(new List<Solid> { hostSolid }, "side");
                     Face maxFace = sideFaces.OrderByDescending(x => x.Area).FirstOrDefault();
-                    sideFaces = new List<Face> { maxFace };
+                    //sideFaces = new List<Face> { maxFace };
                     foreach (Face face in sideFaces)
                     {
                         (List<PointToMatrix>, List<List<Curve>>, int, int, List<Curve>) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
@@ -621,6 +621,8 @@ namespace AutoTemplate
                         curveLoopList.Add(curveLoop.ToList()); // 牆面所有開口處
                         foreach (Curve curve in curveLoop) { drawCurves.Add(curve); }
                     }
+
+                    foreach (Curve bbCurve in boundingBoxCurveLoop) { drawCurves.Add(bbCurve); }
                 }
             }
 
