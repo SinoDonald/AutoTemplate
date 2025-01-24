@@ -92,7 +92,7 @@ namespace AutoTemplate
                 {
                     List<Face> sideFaces = GetFaces(new List<Solid> { hostSolid }, "side");
                     Face maxFace = sideFaces.OrderByDescending(x => x.Area).FirstOrDefault();
-                    //sideFaces = new List<Face> { maxFace };
+                    sideFaces = new List<Face> { maxFace };
                     foreach (Face face in sideFaces)
                     {
                         (List<PointToMatrix>, List<List<Curve>>, int, int, List<Curve>) pointToMatrix = GenerateUniformPoints(face); // 將Face網格化, 每100cm佈一個點
@@ -101,18 +101,90 @@ namespace AutoTemplate
                         int rows = pointToMatrix.Item3;
                         int cols = pointToMatrix.Item4;
                         List<Curve> drawCurves = pointToMatrix.Item5;
+                        //foreach (Curve drawCurve in drawCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+
+
+                        // 區塊分割計算
+                        List<Curve> leftRightCurves = new List<Curve>(); // 左右線段
+                        List<Curve> upDownCurves = new List<Curve>(); // 上下線段
+
+
+                        List<XYZ> normalizes = new List<XYZ>();
+                        foreach (Curve curve in drawCurves)
+                        {
+                            for(int i = 0; i < curve.Tessellate().Count - 1; i++)
+                            {
+                                XYZ startPoint = curve.GetEndPoint(i);
+                                XYZ endPoint = curve.GetEndPoint(i + 1);
+                                XYZ direction = endPoint - startPoint;
+                                double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
+                                double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
+                                double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
+                                XYZ sameDirection = normalizes.Where(x => x.X.Equals(directionX) && x.Y.Equals(directionY) && x.Z.Equals(directionZ)).FirstOrDefault();
+                                if (sameDirection == null) { normalizes.Add(new XYZ(directionX, directionY, directionZ)); }
+                            }
+                        }
+                        normalizes = normalizes.Distinct().ToList();
+                        XYZ normalize = normalizes.LastOrDefault();
+                        foreach (Curve curve in drawCurves)
+                        {
+                            for (int i = 0; i < curve.Tessellate().Count - 1; i++)
+                            {
+                                XYZ startPoint = curve.GetEndPoint(i);
+                                XYZ endPoint = curve.GetEndPoint(i + 1);
+                                XYZ direction = endPoint - startPoint;
+
+                                double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
+                                double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
+                                double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
+                                double normalizeX = ToZeroIfCloseToZero(normalize.X);
+                                double normalizeY = ToZeroIfCloseToZero(normalize.Y);
+                                double normalizeZ = ToZeroIfCloseToZero(normalize.Z);
+                                if ((directionX == normalizeX) && (directionY == normalizeY) && (directionZ == normalizeZ))
+                                {
+                                    //DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView();
+                                }
+                                if (directionX == XYZ.BasisX.X && directionY == XYZ.BasisX.Y && directionZ == XYZ.BasisX.Z) { upDownCurves.Add(curve); }
+                                else if (directionX == -XYZ.BasisX.X && directionY == -XYZ.BasisX.Y && directionZ == -XYZ.BasisX.Z) { upDownCurves.Add(curve); }
+                                else if (directionX == XYZ.BasisZ.X && directionY == XYZ.BasisZ.Y && directionZ == XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
+                                else if (directionX == -XYZ.BasisZ.X && directionY == -XYZ.BasisZ.Y && directionZ == -XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
+                            }
+                        }
+                        foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+
+                        drawCurves = new List<Curve>();
+                        foreach (Curve upDownCurve in upDownCurves) 
+                        { 
+                            for(int i = 0; i < upDownCurve.Tessellate().Count - 1; i++)
+                            {
+                                XYZ startXYZ = upDownCurve.Tessellate()[i];
+                                XYZ endXYZ = upDownCurve.Tessellate()[i + 1];
+                                try
+                                {
+                                    XYZ startToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(startXYZ)).FirstOrDefault().Project(startXYZ).XYZPoint;
+                                    drawCurves.Add(Line.CreateBound(startXYZ, startToCurveXYZ));
+                                }
+                                catch (Exception) { }
+                                try
+                                {
+                                    XYZ endToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(endXYZ)).FirstOrDefault().Project(endXYZ).XYZPoint;
+                                    drawCurves.Add(Line.CreateBound(endXYZ, endToCurveXYZ));
+                                }
+                                catch (Exception) { }
+                            }
+                        }
                         foreach (Curve drawCurve in drawCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
 
-                        (List<Line>, List<Line>, List<Line>) leftRightLines = LeftRightLines(face, curveLoopList);
-                        List<Line> leftLines = leftRightLines.Item1; // 左邊的線段
-                        List<Line> rightLines = leftRightLines.Item2; // 右邊的線段
-                        List<Line> allLines = leftRightLines.Item3; // 全部的線段
-                        //foreach (Line line in allLines) { DrawLine(doc, line); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                        //(List<Line>, List<Line>, List<Line>) leftRightLines = LeftRightLines(face, curveLoopList);
+                        //List<Line> leftLines = leftRightLines.Item1; // 左邊的線段
+                        //List<Line> rightLines = leftRightLines.Item2; // 右邊的線段
+                        //List<Line> allLines = leftRightLines.Item3; // 全部的線段
+                        ////foreach (Line line in allLines) { DrawLine(doc, line); doc.Regenerate(); uidoc.RefreshActiveView(); }
 
-                        CurveLoop maxCurveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList().FirstOrDefault(); // Face最大的範圍邊界
-                        List<Line> maxCurveList = new List<Line>();
-                        foreach (Curve maxCurve in maxCurveLoops) { maxCurveList.Add(Line.CreateBound(maxCurve.Tessellate()[0], maxCurve.Tessellate()[maxCurve.Tessellate().Count - 1])); }
-                        maxCurveList = maxCurveList.Where(x => x.Direction.Z > 0 || x.Direction.Z < 0).ToList();
+                        //CurveLoop maxCurveLoops = face.GetEdgesAsCurveLoops().ToList().OrderByDescending(x => x.GetExactLength()).ToList().FirstOrDefault(); // Face最大的範圍邊界
+                        //List<Line> maxCurveList = new List<Line>();
+                        //foreach (Curve maxCurve in maxCurveLoops) { maxCurveList.Add(Line.CreateBound(maxCurve.Tessellate()[0], maxCurve.Tessellate()[maxCurve.Tessellate().Count - 1])); }
+                        //maxCurveList = maxCurveList.Where(x => x.Direction.Z > 0 || x.Direction.Z < 0).ToList();
                         //if (maxCurveList.Count > 1)
                         //{
                         //    BoundingBoxUV bboxUV = face.GetBoundingBox();
@@ -242,6 +314,11 @@ namespace AutoTemplate
             }
 
             return Result.Succeeded;
+        }
+        private double ToZeroIfCloseToZero(double value)
+        {
+            double threshold = 1e-14;
+            return Math.Abs(value) < threshold ? 0 : value;
         }
         /// <summary>
         /// 查詢所有柱牆的Element
@@ -656,23 +733,20 @@ namespace AutoTemplate
         private bool SameFaceNormal(Face face, XYZ faceNormal)
         {
             bool trueOrFalse = false;
-            double faceNormalX = ToZeroIfCloseToZero(faceNormal.X, 1e-14);
-            double faceNormalY = ToZeroIfCloseToZero(faceNormal.Y, 1e-14);
-            double faceNormalZ = ToZeroIfCloseToZero(faceNormal.Z, 1e-14);
+            double threshold = 1e-14;
+            double faceNormalX = Math.Abs(faceNormal.X) < threshold ? 0 : faceNormal.X;
+            double faceNormalY = Math.Abs(faceNormal.Y) < threshold ? 0 : faceNormal.Y;
+            double faceNormalZ = Math.Abs(faceNormal.Z) < threshold ? 0 : faceNormal.Z;
             try
             {
                 PlanarFace planarFace = face as PlanarFace;
-                double planarFaceX = ToZeroIfCloseToZero(planarFace.FaceNormal.X, 1e-14);
-                double planarFaceY = ToZeroIfCloseToZero(planarFace.FaceNormal.Y, 1e-14);
-                double planarFaceZ = ToZeroIfCloseToZero(planarFace.FaceNormal.Z, 1e-14);
+                double planarFaceX = Math.Abs(planarFace.FaceNormal.X) < threshold ? 0 : planarFace.FaceNormal.X;
+                double planarFaceY = Math.Abs(planarFace.FaceNormal.Y) < threshold ? 0 : planarFace.FaceNormal.Y;
+                double planarFaceZ = Math.Abs(planarFace.FaceNormal.Z) < threshold ? 0 : planarFace.FaceNormal.Z;
                 if (planarFaceX == faceNormalX && planarFaceY == faceNormalY && planarFaceZ == faceNormalZ) { trueOrFalse = true; }
             }
             catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             return trueOrFalse;
-        }
-        public double ToZeroIfCloseToZero(double value, double threshold)
-        {
-            return Math.Abs(value) < threshold ? 0 : value;
         }
         /// <summary>
         /// 使用邊界計算門開口處
