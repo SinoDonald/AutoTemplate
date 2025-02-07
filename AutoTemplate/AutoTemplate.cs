@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Media.Media3D;
 using System.Windows.Media.TextFormatting;
 using static AutoTemplate.AutoTemplate;
 using static System.Windows.Forms.LinkLabel;
@@ -101,15 +102,14 @@ namespace AutoTemplate
                         int rows = pointToMatrix.Item3;
                         int cols = pointToMatrix.Item4;
                         List<Curve> drawCurves = pointToMatrix.Item5;
-                        //foreach (Curve drawCurve in drawCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
-
 
                         // 區塊分割計算
                         List<Curve> leftRightCurves = new List<Curve>(); // 左右線段
                         List<Curve> leftCurves = new List<Curve>(); // 左線段
                         List<Curve> rightCurves = new List<Curve>(); // 右線段
                         List<Curve> upDownCurves = new List<Curve>(); // 上下線段
-                        List<Curve> testCurves = new List<Curve>(); // 左右線段
+                        List<Curve> upCurves = new List<Curve>(); // 上線段
+                        List<Curve> downCurves = new List<Curve>(); // 下線段
 
                         // 儲存所有線段
                         foreach (List<Curve> curveLoop in curveLoopList)
@@ -122,89 +122,102 @@ namespace AutoTemplate
                                 double directionZ = ToZeroIfCloseToZero(line.Direction.Z);
                                 if (directionX.Equals(0) && directionY.Equals(0))
                                 {
-                                    if (directionZ.Equals(1) || directionZ.Equals(-1))
-                                    {
-                                        leftRightCurves.Add(curve);
-                                    }
+                                    if (directionZ.Equals(1)) { leftCurves.Add(curve); leftRightCurves.Add(curve); }
+                                    else if (directionZ.Equals(-1)) { rightCurves.Add(curve); leftRightCurves.Add(curve); }
                                 }
                                 if (directionZ.Equals(0) && directionY.Equals(0))
                                 {
-                                    if (directionX.Equals(1) || directionX.Equals(-1))
-                                    {
-                                        upDownCurves.Add(curve);
-                                    }
+                                    if (directionX.Equals(1)) { upCurves.Add(curve); upDownCurves.Add(curve); }
+                                    else if (directionX.Equals(-1)) { downCurves.Add(curve); upDownCurves.Add(curve); }
                                 }
                             }
                         }
                         // 進行線段左右排序
-                        BoundingBoxUV bboxUV = face.GetBoundingBox();
-                        XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
-                        leftRightCurves = leftRightCurves.OrderBy(x => x.Project(minXYZ).Distance).ToList();
-
-                        List<XYZ> normalizes = new List<XYZ>();
-                        foreach (Curve curve in drawCurves)
+                        if (leftRightCurves.Count > 2) // 有開口
                         {
-                            for(int i = 0; i < curve.Tessellate().Count - 1; i++)
-                            {
-                                XYZ startPoint = curve.GetEndPoint(i);
-                                XYZ endPoint = curve.GetEndPoint(i + 1);
-                                XYZ direction = endPoint - startPoint;
-                                double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
-                                double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
-                                double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
-                                XYZ sameDirection = normalizes.Where(x => x.X.Equals(directionX) && x.Y.Equals(directionY) && x.Z.Equals(directionZ)).FirstOrDefault();
-                                if (sameDirection == null) { normalizes.Add(new XYZ(directionX, directionY, directionZ)); }
-                            }
+                            BoundingBoxUV bboxUV = face.GetBoundingBox();
+                            XYZ minXYZ = face.Evaluate(bboxUV.Min); // 最小座標點
+                            XYZ maxXYZ = face.Evaluate(bboxUV.Max); // 最大座標點
+                            leftRightCurves = leftRightCurves.OrderBy(x => x.Project(minXYZ).Distance).ToList();
+                            leftCurves = leftCurves.OrderBy(x => x.Project(minXYZ).Distance).ToList();
+                            rightCurves = rightCurves.OrderBy(x => x.Project(maxXYZ).Distance).ToList();
+                            Curve leftestCurve = leftCurves.OrderBy(x => x.Project(minXYZ).Distance).FirstOrDefault(); // 最左邊的邊
+                            Curve rightestCurve = rightCurves.OrderBy(x => x.Project(maxXYZ).Distance).FirstOrDefault(); // 最右邊的邊
+                            leftRightCurves = new List<Curve>();
+                            // 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊
+                            PlanarFace planarFace = face as PlanarFace;
+                            UseCurveLoopToCreateSolid(doc, planarFace.FaceNormal, leftCurves, leftestCurve);
+                            foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
                         }
-                        normalizes = normalizes.Distinct().ToList();
-                        XYZ normalize = normalizes.LastOrDefault();
-                        foreach (Curve curve in drawCurves)
+                        else // 沒有開口
                         {
-                            for (int i = 0; i < curve.Tessellate().Count - 1; i++)
-                            {
-                                XYZ startPoint = curve.GetEndPoint(i);
-                                XYZ endPoint = curve.GetEndPoint(i + 1);
-                                XYZ direction = endPoint - startPoint;
 
-                                double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
-                                double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
-                                double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
-                                double normalizeX = ToZeroIfCloseToZero(normalize.X);
-                                double normalizeY = ToZeroIfCloseToZero(normalize.Y);
-                                double normalizeZ = ToZeroIfCloseToZero(normalize.Z);
-                                if ((directionX == normalizeX) && (directionY == normalizeY) && (directionZ == normalizeZ))
-                                {
-                                    //DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView();
-                                }
-                                if (directionX == XYZ.BasisX.X && directionY == XYZ.BasisX.Y && directionZ == XYZ.BasisX.Z) { upDownCurves.Add(curve); }
-                                else if (directionX == -XYZ.BasisX.X && directionY == -XYZ.BasisX.Y && directionZ == -XYZ.BasisX.Z) { upDownCurves.Add(curve); }
-                                //else if (directionX == XYZ.BasisZ.X && directionY == XYZ.BasisZ.Y && directionZ == XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
-                                //else if (directionX == -XYZ.BasisZ.X && directionY == -XYZ.BasisZ.Y && directionZ == -XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
-                            }
                         }
-                        foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
 
-                        drawCurves = new List<Curve>();
-                        foreach (Curve upDownCurve in upDownCurves) 
-                        { 
-                            for(int i = 0; i < upDownCurve.Tessellate().Count - 1; i++)
-                            {
-                                XYZ startXYZ = upDownCurve.Tessellate()[i];
-                                XYZ endXYZ = upDownCurve.Tessellate()[i + 1];
-                                try
-                                {
-                                    XYZ startToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(startXYZ)).FirstOrDefault().Project(startXYZ).XYZPoint;
-                                    drawCurves.Add(Line.CreateBound(startXYZ, startToCurveXYZ));
-                                }
-                                catch (Exception) { }
-                                try
-                                {
-                                    XYZ endToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(endXYZ)).FirstOrDefault().Project(endXYZ).XYZPoint;
-                                    drawCurves.Add(Line.CreateBound(endXYZ, endToCurveXYZ));
-                                }
-                                catch (Exception) { }
-                            }
-                        }
+
+                        //List<XYZ> normalizes = new List<XYZ>();
+                        //foreach (Curve curve in drawCurves)
+                        //{
+                        //    for(int i = 0; i < curve.Tessellate().Count - 1; i++)
+                        //    {
+                        //        XYZ startPoint = curve.GetEndPoint(i);
+                        //        XYZ endPoint = curve.GetEndPoint(i + 1);
+                        //        XYZ direction = endPoint - startPoint;
+                        //        double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
+                        //        double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
+                        //        double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
+                        //        XYZ sameDirection = normalizes.Where(x => x.X.Equals(directionX) && x.Y.Equals(directionY) && x.Z.Equals(directionZ)).FirstOrDefault();
+                        //        if (sameDirection == null) { normalizes.Add(new XYZ(directionX, directionY, directionZ)); }
+                        //    }
+                        //}
+                        //normalizes = normalizes.Distinct().ToList();
+                        //XYZ normalize = normalizes.LastOrDefault();
+                        //foreach (Curve curve in drawCurves)
+                        //{
+                        //    for (int i = 0; i < curve.Tessellate().Count - 1; i++)
+                        //    {
+                        //        XYZ startPoint = curve.GetEndPoint(i);
+                        //        XYZ endPoint = curve.GetEndPoint(i + 1);
+                        //        XYZ direction = endPoint - startPoint;
+
+                        //        double directionX = ToZeroIfCloseToZero(direction.Normalize().X);
+                        //        double directionY = ToZeroIfCloseToZero(direction.Normalize().Y);
+                        //        double directionZ = ToZeroIfCloseToZero(direction.Normalize().Z);
+                        //        double normalizeX = ToZeroIfCloseToZero(normalize.X);
+                        //        double normalizeY = ToZeroIfCloseToZero(normalize.Y);
+                        //        double normalizeZ = ToZeroIfCloseToZero(normalize.Z);
+                        //        if ((directionX == normalizeX) && (directionY == normalizeY) && (directionZ == normalizeZ))
+                        //        {
+                        //            //DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView();
+                        //        }
+                        //        if (directionX == XYZ.BasisX.X && directionY == XYZ.BasisX.Y && directionZ == XYZ.BasisX.Z) { upDownCurves.Add(curve); }
+                        //        else if (directionX == -XYZ.BasisX.X && directionY == -XYZ.BasisX.Y && directionZ == -XYZ.BasisX.Z) { upDownCurves.Add(curve); }
+                        //        //else if (directionX == XYZ.BasisZ.X && directionY == XYZ.BasisZ.Y && directionZ == XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
+                        //        //else if (directionX == -XYZ.BasisZ.X && directionY == -XYZ.BasisZ.Y && directionZ == -XYZ.BasisZ.Z) { leftRightCurves.Add(curve); }
+                        //    }
+                        //}
+
+                        //drawCurves = new List<Curve>();
+                        //foreach (Curve upDownCurve in upDownCurves) 
+                        //{ 
+                        //    for(int i = 0; i < upDownCurve.Tessellate().Count - 1; i++)
+                        //    {
+                        //        XYZ startXYZ = upDownCurve.Tessellate()[i];
+                        //        XYZ endXYZ = upDownCurve.Tessellate()[i + 1];
+                        //        try
+                        //        {
+                        //            XYZ startToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(startXYZ)).FirstOrDefault().Project(startXYZ).XYZPoint;
+                        //            drawCurves.Add(Line.CreateBound(startXYZ, startToCurveXYZ));
+                        //        }
+                        //        catch (Exception) { }
+                        //        try
+                        //        {
+                        //            XYZ endToCurveXYZ = leftRightCurves.OrderByDescending(x => x.Distance(endXYZ)).FirstOrDefault().Project(endXYZ).XYZPoint;
+                        //            drawCurves.Add(Line.CreateBound(endXYZ, endToCurveXYZ));
+                        //        }
+                        //        catch (Exception) { }
+                        //    }
+                        //}
                         //foreach (Curve drawCurve in drawCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
 
                         //(List<Line>, List<Line>, List<Line>) leftRightLines = LeftRightLines(face, curveLoopList);
@@ -346,6 +359,36 @@ namespace AutoTemplate
             }
 
             return Result.Succeeded;
+        }
+        /// <summary>
+        /// 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊
+        /// </summary>
+        /// <param name="curves"></param>
+        /// <param name="leftOrRightestCurve"></param>
+        /// <returns></returns>
+        private void UseCurveLoopToCreateSolid(Document doc, XYZ faceNormal, List<Curve> curves, Curve leftOrRightestCurve)
+        {
+            SolidOptions options = new SolidOptions(ElementId.InvalidElementId, ElementId.InvalidElementId);
+            foreach (Curve curve in curves)
+            {
+                try
+                {
+                    XYZ point1 = curve.Tessellate()[0];
+                    XYZ point2 = curve.Tessellate()[curve.Tessellate().Count - 1];
+                    XYZ point3 = leftOrRightestCurve.Project(point2).XYZPoint;
+                    XYZ point4 = leftOrRightestCurve.Project(point1).XYZPoint;
+                    Curve curve1 = Line.CreateBound(point1, point2);
+                    Curve curve2 = Line.CreateBound(point2, point3);
+                    Curve curve3 = Line.CreateBound(point3, point4);
+                    Curve curve4 = Line.CreateBound(point4, point1);
+                    CurveLoop curveLoop = CurveLoop.Create(new List<Curve>() { curve1, curve2, curve3, curve4 });
+                    IList<CurveLoop> curveLoops = new List<CurveLoop>() { curveLoop };
+                    Solid solid = GeometryCreationUtilities.CreateExtrusionGeometry(curveLoops, faceNormal, 0.1, options);
+                    DirectShape ds = DirectShape.CreateElement(doc, new ElementId(BuiltInCategory.OST_GenericModel));
+                    ds.SetShape(new List<GeometryObject>() { solid });
+                }
+                catch(Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+            }
         }
         private double ToZeroIfCloseToZero(double value)
         {
