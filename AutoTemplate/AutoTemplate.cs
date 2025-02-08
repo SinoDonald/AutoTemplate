@@ -4,6 +4,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Windows;
@@ -127,9 +128,10 @@ namespace AutoTemplate
                                 }
                                 if (directionZ.Equals(0) && directionY.Equals(0))
                                 {
-                                    if (directionX.Equals(1)) { upCurves.Add(curve); upDownCurves.Add(curve); }
-                                    else if (directionX.Equals(-1)) { downCurves.Add(curve); upDownCurves.Add(curve); }
+                                    if (directionX.Equals(-1)) { upCurves.Add(curve); upDownCurves.Add(curve); }
+                                    else if (directionX.Equals(1)) { downCurves.Add(curve); upDownCurves.Add(curve); }
                                 }
+                                //DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView();
                             }
                         }
                         // 進行線段左右排序
@@ -146,8 +148,8 @@ namespace AutoTemplate
                             leftRightCurves = new List<Curve>();
                             // 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊
                             PlanarFace planarFace = face as PlanarFace;
-                            UseCurveLoopToCreateSolid(doc, planarFace.FaceNormal, leftCurves, leftestCurve);
-                            foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
+                            UseCurveLoopToCreateSolid(uidoc, doc, planarFace.FaceNormal, leftCurves, leftestCurve, upDownCurves);
+                            //foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
                         }
                         else // 沒有開口
                         {
@@ -321,17 +323,6 @@ namespace AutoTemplate
                         //}
 
 
-
-
-
-
-
-
-
-
-
-
-
                         //Form1 form1 = new Form1(pointToMatrixs, cols, rows);
                         //form1.ShowDialog();
 
@@ -361,12 +352,13 @@ namespace AutoTemplate
             return Result.Succeeded;
         }
         /// <summary>
-        /// 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊
+        /// 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊, 並建立為Solid
         /// </summary>
+        /// <param name="doc"></param>
+        /// <param name="faceNormal"></param>
         /// <param name="curves"></param>
         /// <param name="leftOrRightestCurve"></param>
-        /// <returns></returns>
-        private void UseCurveLoopToCreateSolid(Document doc, XYZ faceNormal, List<Curve> curves, Curve leftOrRightestCurve)
+        private void UseCurveLoopToCreateSolid(UIDocument uidoc, Document doc, XYZ faceNormal, List<Curve> curves, Curve leftOrRightestCurve, List<Curve> upDownCurves)
         {
             SolidOptions options = new SolidOptions(ElementId.InvalidElementId, ElementId.InvalidElementId);
             foreach (Curve curve in curves)
@@ -386,9 +378,103 @@ namespace AutoTemplate
                     Solid solid = GeometryCreationUtilities.CreateExtrusionGeometry(curveLoops, faceNormal, 0.1, options);
                     DirectShape ds = DirectShape.CreateElement(doc, new ElementId(BuiltInCategory.OST_GenericModel));
                     ds.SetShape(new List<GeometryObject>() { solid });
+                    doc.Regenerate();
+
+                    List<XYZ> xyzs = new List<XYZ>();
+                    List<Face> solidFaces = new List<Face>();
+                    foreach (Face face in solid.Faces)
+                    {
+                        PlanarFace pf = face as PlanarFace;
+                        double faceNormalX = ToZeroIfCloseToZero(pf.FaceNormal.X);
+                        double faceNormalY = ToZeroIfCloseToZero(pf.FaceNormal.Y);
+                        double faceNormalZ = ToZeroIfCloseToZero(pf.FaceNormal.Z);
+                        if (faceNormal.X.Equals(-faceNormalX) && faceNormal.Y.Equals(-faceNormalY) && faceNormal.Z.Equals(-faceNormalZ))
+                        {
+                            solidFaces.Add(face);
+                        }
+                    }
+                    if (solidFaces.Count > 0) 
+                    { 
+                        Face soildFace = solidFaces.FirstOrDefault();
+                        List<Curve> containCurves = new List<Curve>();
+                        List<Curve> upCurves = new List<Curve>();
+                        List<Curve> downCurves = new List<Curve>();
+                        foreach (Curve upDownCurve in upDownCurves)
+                        {
+                            bool trueOrFalse = false;
+                            foreach (XYZ upDownXYZ in upDownCurve.Tessellate())
+                            {
+                                if (IsPointInsideSolid(faceNormal, soildFace, upDownXYZ)) { trueOrFalse = true; }
+                                else { trueOrFalse = false; break; }
+                            }
+                            if (trueOrFalse) 
+                            {
+                                containCurves.Add(upDownCurve);
+
+                                Line line = upDownCurve as Line;
+                                double directionX = ToZeroIfCloseToZero(line.Direction.X);
+                                double directionY = ToZeroIfCloseToZero(line.Direction.Y);
+                                double directionZ = ToZeroIfCloseToZero(line.Direction.Z);
+                                if (directionZ.Equals(0) && directionY.Equals(0))
+                                {
+                                    if (directionX.Equals(-1)) { upCurves.Add(upDownCurve); }
+                                    else if (directionX.Equals(1)) { downCurves.Add(upDownCurve); }
+                                }
+                            }
+                        }
+                        if (containCurves.Count > 0)
+                        {
+                            // 只包含上方的線
+                            if(upCurves.Count > 0 && downCurves.Count == 0)
+                            {
+                                Curve heightestCurve = upCurves.OrderBy(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                DrawLine(doc, heightestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                            }
+                            // 只包含下方的線
+                            if (upCurves.Count == 0 && downCurves.Count > 0)
+                            {
+                                Curve lowestCurve = downCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                DrawLine(doc, lowestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                            }
+                            // 包含上方與下方的線
+                            if (upCurves.Count > 0 && downCurves.Count > 0)
+                            {
+                                Curve lowestCurve = downCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                DrawLine(doc, lowestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                            }
+                            //foreach (Curve drawCurve in containCurves)
+                            //{
+                            //    DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                            //}
+                        }
+                        else
+                        {
+                            foreach(Curve solidCurve in curveLoop)
+                            {
+                                DrawLine(doc, solidCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                            }
+                        }
+                    }
+                    doc.Delete(ds.Id);
+                    doc.Regenerate();
+
+                    //List<Element> elems = new List<Element>() { ds };
+                    //List<IntersectionElem> list = IntersectGroup(doc, elems);
                 }
-                catch(Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
+                catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
+        }
+        public bool IsPointInsideSolid(XYZ faceNormal, Face soildFace, XYZ point)
+        {
+            int intersections = 0;
+            IntersectionResultArray results;
+            Line ray = Line.CreateBound(point, point + faceNormal * 1000);
+            if (soildFace.Intersect(ray, out results) == SetComparisonResult.Overlap && results != null) { intersections += results.Size; }
+
+            // 若交點數為奇數，則點在Solid內
+            bool trueOrFalse = false;
+            if((intersections % 2) == 1) { trueOrFalse = true; }
+            return trueOrFalse;
         }
         private double ToZeroIfCloseToZero(double value)
         {
