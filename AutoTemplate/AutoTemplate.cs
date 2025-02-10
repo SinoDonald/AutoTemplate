@@ -118,18 +118,16 @@ namespace AutoTemplate
                             foreach(Curve curve in curveLoop)
                             {
                                 Line line = curve as Line;
-                                double directionX = ToZeroIfCloseToZero(line.Direction.X);
-                                double directionY = ToZeroIfCloseToZero(line.Direction.Y);
-                                double directionZ = ToZeroIfCloseToZero(line.Direction.Z);
-                                if (directionX.Equals(0) && directionY.Equals(0))
+                                XYZ direction = ToZeroIfCloseToZero(line.Direction);
+                                if (direction.X.Equals(0) && direction.Y.Equals(0))
                                 {
-                                    if (directionZ.Equals(1)) { leftCurves.Add(curve); leftRightCurves.Add(curve); }
-                                    else if (directionZ.Equals(-1)) { rightCurves.Add(curve); leftRightCurves.Add(curve); }
+                                    if (direction.Z.Equals(1)) { leftCurves.Add(curve); leftRightCurves.Add(curve); }
+                                    else if (direction.Z.Equals(-1)) { rightCurves.Add(curve); leftRightCurves.Add(curve); }
                                 }
-                                if (directionZ.Equals(0) && directionY.Equals(0))
+                                if (direction.Z.Equals(0) && direction.Y.Equals(0))
                                 {
-                                    if (directionX.Equals(-1)) { upCurves.Add(curve); upDownCurves.Add(curve); }
-                                    else if (directionX.Equals(1)) { downCurves.Add(curve); upDownCurves.Add(curve); }
+                                    if (direction.X.Equals(-1)) { upCurves.Add(curve); upDownCurves.Add(curve); }
+                                    else if (direction.X.Equals(1)) { downCurves.Add(curve); upDownCurves.Add(curve); }
                                 }
                                 //DrawLine(doc, curve); doc.Regenerate(); uidoc.RefreshActiveView();
                             }
@@ -145,10 +143,10 @@ namespace AutoTemplate
                             rightCurves = rightCurves.OrderBy(x => x.Project(maxXYZ).Distance).ToList();
                             Curve leftestCurve = leftCurves.OrderBy(x => x.Project(minXYZ).Distance).FirstOrDefault(); // 最左邊的邊
                             Curve rightestCurve = rightCurves.OrderBy(x => x.Project(maxXYZ).Distance).FirstOrDefault(); // 最右邊的邊
-                            leftRightCurves = new List<Curve>();
+                            //leftRightCurves = new List<Curve>();
                             // 將邊界與最旁邊的邊連結成矩形, 左線段連結左邊、右線段連結右邊
                             PlanarFace planarFace = face as PlanarFace;
-                            UseCurveLoopToCreateSolid(uidoc, doc, planarFace.FaceNormal, leftCurves, leftestCurve, upDownCurves);
+                            UseCurveLoopToCreateSolid(uidoc, doc, planarFace.FaceNormal, leftCurves, leftestCurve, upDownCurves, leftRightCurves);
                             //foreach (Curve drawCurve in leftRightCurves) { DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView(); }
                         }
                         else // 沒有開口
@@ -358,13 +356,14 @@ namespace AutoTemplate
         /// <param name="faceNormal"></param>
         /// <param name="curves"></param>
         /// <param name="leftOrRightestCurve"></param>
-        private void UseCurveLoopToCreateSolid(UIDocument uidoc, Document doc, XYZ faceNormal, List<Curve> curves, Curve leftOrRightestCurve, List<Curve> upDownCurves)
+        private void UseCurveLoopToCreateSolid(UIDocument uidoc, Document doc, XYZ faceNormal, List<Curve> curves, Curve leftOrRightestCurve, List<Curve> upDownCurves, List<Curve> leftRightCurves)
         {
             SolidOptions options = new SolidOptions(ElementId.InvalidElementId, ElementId.InvalidElementId);
             foreach (Curve curve in curves)
             {
                 try
                 {
+                    // 建立要干涉的矩形
                     XYZ point1 = curve.Tessellate()[0];
                     XYZ point2 = curve.Tessellate()[curve.Tessellate().Count - 1];
                     XYZ point3 = leftOrRightestCurve.Project(point2).XYZPoint;
@@ -385,26 +384,41 @@ namespace AutoTemplate
                     foreach (Face face in solid.Faces)
                     {
                         PlanarFace pf = face as PlanarFace;
-                        double faceNormalX = ToZeroIfCloseToZero(pf.FaceNormal.X);
-                        double faceNormalY = ToZeroIfCloseToZero(pf.FaceNormal.Y);
-                        double faceNormalZ = ToZeroIfCloseToZero(pf.FaceNormal.Z);
-                        if (faceNormal.X.Equals(-faceNormalX) && faceNormal.Y.Equals(-faceNormalY) && faceNormal.Z.Equals(-faceNormalZ))
+                        XYZ pfFaceNormal = ToZeroIfCloseToZero(pf.FaceNormal);
+                        if (faceNormal.X.Equals(-pfFaceNormal.X) && faceNormal.Y.Equals(-pfFaceNormal.Y) && faceNormal.Z.Equals(-pfFaceNormal.Z))
                         {
                             solidFaces.Add(face);
                         }
                     }
-                    if (solidFaces.Count > 0) 
-                    { 
-                        Face soildFace = solidFaces.FirstOrDefault();
+                    if (solidFaces.Count > 0)
+                    {
+                        // 找到此面所有干涉的線段
+                        Face solidFace = solidFaces.OrderBy(x => x.Area).FirstOrDefault();
                         List<Curve> containCurves = new List<Curve>();
                         List<Curve> upCurves = new List<Curve>();
                         List<Curve> downCurves = new List<Curve>();
+
+                        // 檢測solidFace是否有涵蓋垂直的線段
+                        List<Curve> haveLeftRightCurves = new List<Curve>();
+                        foreach(Curve solidCurve in curveLoop)
+                        {
+                            foreach(Curve leftRightCurve in leftRightCurves)
+                            {
+                                if (leftRightCurve != curve && leftRightCurve != leftOrRightestCurve)
+                                {
+                                    IntersectionResultArray results;
+                                    SetComparisonResult result = solidCurve.Intersect(leftRightCurve, out results);
+                                    if (result == SetComparisonResult.Overlap && results != null && results.Size > 0) { haveLeftRightCurves.Add(leftRightCurve); }
+                                }
+                            }
+                        }
+
                         foreach (Curve upDownCurve in upDownCurves)
                         {
                             bool trueOrFalse = false;
                             foreach (XYZ upDownXYZ in upDownCurve.Tessellate())
                             {
-                                if (IsPointInsideSolid(faceNormal, soildFace, upDownXYZ)) { trueOrFalse = true; }
+                                if (IsPointInsideSolid(faceNormal, solidFace, upDownXYZ)) { trueOrFalse = true; }
                                 else { trueOrFalse = false; break; }
                             }
                             if (trueOrFalse) 
@@ -412,46 +426,64 @@ namespace AutoTemplate
                                 containCurves.Add(upDownCurve);
 
                                 Line line = upDownCurve as Line;
-                                double directionX = ToZeroIfCloseToZero(line.Direction.X);
-                                double directionY = ToZeroIfCloseToZero(line.Direction.Y);
-                                double directionZ = ToZeroIfCloseToZero(line.Direction.Z);
-                                if (directionZ.Equals(0) && directionY.Equals(0))
+                                XYZ direction = ToZeroIfCloseToZero(line.Direction);
+                                if (direction.Z.Equals(0) && direction.Y.Equals(0))
                                 {
-                                    if (directionX.Equals(-1)) { upCurves.Add(upDownCurve); }
-                                    else if (directionX.Equals(1)) { downCurves.Add(upDownCurve); }
+                                    if (direction.X.Equals(-1)) { upCurves.Add(upDownCurve); }
+                                    else if (direction.X.Equals(1)) { downCurves.Add(upDownCurve); }
                                 }
                             }
                         }
                         if (containCurves.Count > 0)
                         {
-                            // 只包含上方的線
-                            if(upCurves.Count > 0 && downCurves.Count == 0)
+                            if (haveLeftRightCurves.Count > 0)
                             {
-                                Curve heightestCurve = upCurves.OrderBy(x => x.Tessellate()[0].Z).FirstOrDefault();
-                                DrawLine(doc, heightestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                                Curve haveLeftRightCurve = haveLeftRightCurves.OrderBy(x => curve.Distance(x.Tessellate()[0])).FirstOrDefault(); // 找到離開口最近的垂直線
+                                // 包含上方的線
+                                if (upCurves.Count > 0)
+                                {
+                                    // 比對垂直跟平行線誰的距離較近
+                                    Curve heightestCurve = upCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                    double minDistance = heightestCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    double lineDistance = haveLeftRightCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    if(minDistance <= lineDistance)
+                                    {
+                                        XYZ p1 = curve.Project(heightestCurve.Tessellate()[0]).XYZPoint;
+                                        XYZ p2 = leftOrRightestCurve.Project(heightestCurve.Tessellate()[0]).XYZPoint;
+                                        XYZ p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault()).XYZPoint;
+                                        XYZ p4 = curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault();
+                                        List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
+                                        foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
+                                        doc.Regenerate(); uidoc.RefreshActiveView();
+                                    }
+                                }
+                                // 包含下方的線
+                                if (downCurves.Count > 0)
+                                {
+                                    Curve lowestCurve = downCurves.OrderBy(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                    double minDistance = lowestCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    double lineDistance = haveLeftRightCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    if (minDistance < lineDistance)
+                                    {
+                                        XYZ p1 = curve.Project(lowestCurve.Tessellate()[0]).XYZPoint;
+                                        XYZ p2 = leftOrRightestCurve.Project(lowestCurve.Tessellate()[0]).XYZPoint;
+                                        XYZ p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault()).XYZPoint;
+                                        XYZ p4 = curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault();
+                                        List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
+                                        foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
+                                        doc.Regenerate(); uidoc.RefreshActiveView();
+                                    }
+                                }
                             }
-                            // 只包含下方的線
-                            if (upCurves.Count == 0 && downCurves.Count > 0)
-                            {
-                                Curve lowestCurve = downCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
-                                DrawLine(doc, lowestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
-                            }
-                            // 包含上方與下方的線
-                            if (upCurves.Count > 0 && downCurves.Count > 0)
-                            {
-                                Curve lowestCurve = downCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
-                                DrawLine(doc, lowestCurve); doc.Regenerate(); uidoc.RefreshActiveView();
-                            }
-                            //foreach (Curve drawCurve in containCurves)
-                            //{
-                            //    DrawLine(doc, drawCurve); doc.Regenerate(); uidoc.RefreshActiveView();
-                            //}
                         }
                         else
                         {
-                            foreach(Curve solidCurve in curveLoop)
+                            if (haveLeftRightCurves.Count == 0)
                             {
-                                DrawLine(doc, solidCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                                foreach (Curve solidCurve in curveLoop)
+                                {
+                                    DrawLine(doc, solidCurve); doc.Regenerate(); uidoc.RefreshActiveView();
+                                }
                             }
                         }
                     }
@@ -476,10 +508,13 @@ namespace AutoTemplate
             if((intersections % 2) == 1) { trueOrFalse = true; }
             return trueOrFalse;
         }
-        private double ToZeroIfCloseToZero(double value)
+        private XYZ ToZeroIfCloseToZero(XYZ xyz)
         {
             double threshold = 1e-14;
-            return Math.Abs(value) < threshold ? 0 : value;
+            double x = Math.Abs(xyz.X) < threshold ? 0 : xyz.X;
+            double y = Math.Abs(xyz.Y) < threshold ? 0 : xyz.Y;
+            double z = Math.Abs(xyz.Z) < threshold ? 0 : xyz.Z;
+            return new XYZ(x, y, z);
         }
         /// <summary>
         /// 查詢所有柱牆的Element
