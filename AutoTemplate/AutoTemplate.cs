@@ -377,7 +377,7 @@ namespace AutoTemplate
                     Solid solid = GeometryCreationUtilities.CreateExtrusionGeometry(curveLoops, faceNormal, 0.1, options);
                     DirectShape ds = DirectShape.CreateElement(doc, new ElementId(BuiltInCategory.OST_GenericModel));
                     ds.SetShape(new List<GeometryObject>() { solid });
-                    doc.Regenerate();
+                    doc.Regenerate(); uidoc.RefreshActiveView();
 
                     List<XYZ> xyzs = new List<XYZ>();
                     List<Face> solidFaces = new List<Face>();
@@ -399,7 +399,7 @@ namespace AutoTemplate
                         List<Curve> downCurves = new List<Curve>();
 
                         // 檢測solidFace是否有涵蓋垂直的線段
-                        List<Curve> haveLeftRightCurves = new List<Curve>();
+                        List<Curve> verticalCurves = new List<Curve>();
                         foreach(Curve solidCurve in curveLoop)
                         {
                             foreach(Curve leftRightCurve in leftRightCurves)
@@ -408,7 +408,7 @@ namespace AutoTemplate
                                 {
                                     IntersectionResultArray results;
                                     SetComparisonResult result = solidCurve.Intersect(leftRightCurve, out results);
-                                    if (result == SetComparisonResult.Overlap && results != null && results.Size > 0) { haveLeftRightCurves.Add(leftRightCurve); }
+                                    if (result == SetComparisonResult.Overlap && results != null && results.Size > 0) { verticalCurves.Add(leftRightCurve); }
                                 }
                             }
                         }
@@ -436,49 +436,102 @@ namespace AutoTemplate
                         }
                         if (containCurves.Count > 0)
                         {
-                            if (haveLeftRightCurves.Count > 0)
+                            if (verticalCurves.Count > 0)
                             {
-                                Curve haveLeftRightCurve = haveLeftRightCurves.OrderBy(x => curve.Distance(x.Tessellate()[0])).FirstOrDefault(); // 找到離開口最近的垂直線
+                                Curve verticalCurve = verticalCurves.OrderBy(x => curve.Distance(x.Tessellate()[0])).FirstOrDefault(); // 找到離開口最近的垂直線
                                 // 包含上方的線
                                 if (upCurves.Count > 0)
                                 {
                                     // 比對垂直跟平行線誰的距離較近
-                                    Curve heightestCurve = upCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
-                                    double minDistance = heightestCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
-                                    double lineDistance = haveLeftRightCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
-                                    if(minDistance <= lineDistance)
+                                    Curve parallelCurve = upCurves.OrderByDescending(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                    double parallelCurveDistance = parallelCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    double verticalCurveDistance = verticalCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    if(parallelCurveDistance <= verticalCurveDistance)
                                     {
-                                        XYZ p1 = curve.Project(heightestCurve.Tessellate()[0]).XYZPoint;
-                                        XYZ p2 = leftOrRightestCurve.Project(heightestCurve.Tessellate()[0]).XYZPoint;
-                                        XYZ p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault()).XYZPoint;
-                                        XYZ p4 = curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault();
-                                        List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
-                                        foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
-                                        doc.Regenerate(); uidoc.RefreshActiveView();
+                                        // 搜尋是否到最左最右邊界前, 有其他的垂直線段
+                                        List<Curve> secondVerticalCurves = verticalCurves.Where(x => !SamePoint(x, parallelCurve)).OrderByDescending(x => curve.Distance(x.Tessellate()[0])).ToList();
+                                        XYZ p1 = new XYZ();
+                                        XYZ p2 = new XYZ();
+                                        XYZ p3 = new XYZ();
+                                        XYZ p4 = new XYZ();
+                                        if(secondVerticalCurves.Count > 0)
+                                        {
+                                            Curve secondVerticalCurve = secondVerticalCurves[0];
+                                            double z = secondVerticalCurve.Tessellate().OrderBy(x => x.Z).FirstOrDefault().Z;
+                                            if (z > parallelCurve.Tessellate()[0].Z)
+                                            {
+                                                p1 = curve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                                p2 = secondVerticalCurve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                                p3 = secondVerticalCurve.Project(curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault()).XYZPoint;
+                                                p4 = curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault();
+                                            }
+                                            else
+                                            {
+                                                p1 = curve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                                p2 = leftOrRightestCurve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                                p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault()).XYZPoint;
+                                                p4 = curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault();
+                                            }
+                                        }
+                                        else
+                                        {
+                                            p1 = curve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p2 = leftOrRightestCurve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault()).XYZPoint;
+                                            p4 = curve.Tessellate().OrderByDescending(x => x.Z).FirstOrDefault();
+                                        }
+                                        try
+                                        {
+                                            List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
+                                            foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
+                                            doc.Regenerate(); uidoc.RefreshActiveView();
+                                        }
+                                        catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
                                     }
                                 }
                                 // 包含下方的線
                                 if (downCurves.Count > 0)
                                 {
-                                    Curve lowestCurve = downCurves.OrderBy(x => x.Tessellate()[0].Z).FirstOrDefault();
-                                    double minDistance = lowestCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
-                                    double lineDistance = haveLeftRightCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
-                                    if (minDistance < lineDistance)
+                                    Curve parallelCurve = downCurves.OrderBy(x => x.Tessellate()[0].Z).FirstOrDefault();
+                                    double parallelCurveDistance = parallelCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    double verticalCurveDistance = verticalCurve.Tessellate().OrderBy(x => curve.Distance(x)).Select(x => curve.Distance(x)).FirstOrDefault();
+                                    if (parallelCurveDistance < verticalCurveDistance)
                                     {
-                                        XYZ p1 = curve.Project(lowestCurve.Tessellate()[0]).XYZPoint;
-                                        XYZ p2 = leftOrRightestCurve.Project(lowestCurve.Tessellate()[0]).XYZPoint;
-                                        XYZ p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault()).XYZPoint;
-                                        XYZ p4 = curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault();
-                                        List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
-                                        foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
-                                        doc.Regenerate(); uidoc.RefreshActiveView();
+                                        // 搜尋是否到最左最右邊界前, 有其他的垂直線段
+                                        List<Curve> secondVerticalCurves = verticalCurves.Where(x => !SamePoint(x, parallelCurve)).OrderBy(x => curve.Distance(x.Tessellate()[0])).ToList();
+                                        XYZ p1 = new XYZ();
+                                        XYZ p2 = new XYZ();
+                                        XYZ p3 = new XYZ();
+                                        XYZ p4 = new XYZ();
+                                        if (secondVerticalCurves.Count > 0)
+                                        {
+                                            Curve secondVerticalCurve = secondVerticalCurves[0];
+                                            p1 = curve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p2 = secondVerticalCurve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p3 = secondVerticalCurve.Project(curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault()).XYZPoint;
+                                            p4 = curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault();
+                                        }
+                                        else
+                                        {
+                                            p1 = curve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p2 = leftOrRightestCurve.Project(parallelCurve.Tessellate()[0]).XYZPoint;
+                                            p3 = leftOrRightestCurve.Project(curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault()).XYZPoint;
+                                            p4 = curve.Tessellate().OrderBy(x => x.Z).FirstOrDefault();
+                                        }
+                                        try
+                                        {
+                                            List<Curve> rectangleCurves = new List<Curve>() { Line.CreateBound(p1, p2), Line.CreateBound(p2, p3), Line.CreateBound(p3, p4), Line.CreateBound(p4, p1) };
+                                            foreach (Curve rectangleCurve in rectangleCurves) { DrawLine(doc, rectangleCurve); }
+                                            doc.Regenerate(); uidoc.RefreshActiveView();
+                                        }
+                                        catch(Exception ex) { string error = ex.Message +  "\n" + ex.ToString(); }
                                     }
                                 }
                             }
                         }
                         else
                         {
-                            if (haveLeftRightCurves.Count == 0)
+                            if (verticalCurves.Count == 0)
                             {
                                 foreach (Curve solidCurve in curveLoop)
                                 {
@@ -496,6 +549,28 @@ namespace AutoTemplate
                 catch (Exception ex) { string error = ex.Message + "\n" + ex.ToString(); }
             }
         }
+        // 檢查垂直線的座標點是否包含在最高、最低平行線
+        private bool SamePoint(Curve curve, Curve parallelCurve)
+        {
+            bool trueOrFalse = false;
+            foreach(XYZ parallelCurveXYZ in parallelCurve.Tessellate())
+            {
+                XYZ point = ToZeroIfCloseToZero(parallelCurveXYZ);
+                foreach (XYZ xyz in curve.Tessellate())
+                {
+                    XYZ curveXYZ = ToZeroIfCloseToZero(xyz);
+                    if (curveXYZ.X.Equals(point.X) && curveXYZ.Y.Equals(point.Y) && curveXYZ.Z.Equals(point.Z)) { trueOrFalse = true; break; }
+                }
+            }
+            return trueOrFalse;
+        }
+        /// <summary>
+        /// 檢測座標點是否包含在面裡
+        /// </summary>
+        /// <param name="faceNormal"></param>
+        /// <param name="soildFace"></param>
+        /// <param name="point"></param>
+        /// <returns></returns>
         public bool IsPointInsideSolid(XYZ faceNormal, Face soildFace, XYZ point)
         {
             int intersections = 0;
@@ -508,6 +583,11 @@ namespace AutoTemplate
             if((intersections % 2) == 1) { trueOrFalse = true; }
             return trueOrFalse;
         }
+        /// <summary>
+        /// 轉換很接近0的數值為0
+        /// </summary>
+        /// <param name="xyz"></param>
+        /// <returns></returns>
         private XYZ ToZeroIfCloseToZero(XYZ xyz)
         {
             double threshold = 1e-14;
